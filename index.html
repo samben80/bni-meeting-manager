@@ -1293,36 +1293,46 @@
             >
               📊 Tableau de bord
             </button>
-            <button 
-              className={`nav-tab ${currentView === 'meetings' ? 'active' : ''}`}
-              onClick={() => setCurrentView('meetings')}
-            >
-              📅 Réunions
-            </button>
-            <button 
-              className={`nav-tab ${currentView === 'members' ? 'active' : ''}`}
-              onClick={() => setCurrentView('members')}
-            >
-              👥 Membres
-            </button>
-            <button 
-              className={`nav-tab ${currentView === 'guests' ? 'active' : ''}`}
-              onClick={() => setCurrentView('guests')}
-            >
-              👋 Invités
-            </button>
-            <button 
-              className={`nav-tab ${currentView === 'fees' ? 'active' : ''}`}
-              onClick={() => setCurrentView('fees')}
-            >
-              💰 Cotisations
-            </button>
-            <button 
-              className={`nav-tab ${currentView === 'expenses' ? 'active' : ''}`}
-              onClick={() => setCurrentView('expenses')}
-            >
-              💳 Dépenses
-            </button>
+            {(userRole?.canEditMeetings || userRole?.isAdmin) && (
+              <button 
+                className={`nav-tab ${currentView === 'meetings' ? 'active' : ''}`}
+                onClick={() => setCurrentView('meetings')}
+              >
+                📅 Réunions
+              </button>
+            )}
+            {(userRole?.canEditMembers || userRole?.isAdmin) && (
+              <button 
+                className={`nav-tab ${currentView === 'members' ? 'active' : ''}`}
+                onClick={() => setCurrentView('members')}
+              >
+                👥 Membres
+              </button>
+            )}
+            {(userRole?.canEditGuests || userRole?.isAdmin) && (
+              <button 
+                className={`nav-tab ${currentView === 'guests' ? 'active' : ''}`}
+                onClick={() => setCurrentView('guests')}
+              >
+                👋 Invités
+              </button>
+            )}
+            {(userRole?.canEditFees || userRole?.isAdmin) && (
+              <button 
+                className={`nav-tab ${currentView === 'fees' ? 'active' : ''}`}
+                onClick={() => setCurrentView('fees')}
+              >
+                💰 Cotisations
+              </button>
+            )}
+            {(userRole?.canEditExpenses || userRole?.isAdmin) && (
+              <button 
+                className={`nav-tab ${currentView === 'expenses' ? 'active' : ''}`}
+                onClick={() => setCurrentView('expenses')}
+              >
+                💳 Dépenses
+              </button>
+            )}
             {userRole?.canManageUsers && (
               <button 
                 className={`nav-tab ${currentView === 'users' ? 'active' : ''}`}
@@ -1368,7 +1378,7 @@
                 initialCash={initialCash}
               />
             )}
-            {currentView === 'meetings' && (
+            {currentView === 'meetings' && (userRole?.canEditMeetings || userRole?.isAdmin) && (
               <MeetingsView 
                 meetings={meetings}
                 members={members}
@@ -1377,16 +1387,16 @@
                 guestPresences={guestPresences}
               />
             )}
-            {currentView === 'members' && (
+            {currentView === 'members' && (userRole?.canEditMembers || userRole?.isAdmin) && (
               <MembersView members={members} presences={presences} />
             )}
-            {currentView === 'guests' && (
+            {currentView === 'guests' && (userRole?.canEditGuests || userRole?.isAdmin) && (
               <GuestsView guests={guests} meetings={meetings} members={members} />
             )}
-            {currentView === 'fees' && (
+            {currentView === 'fees' && (userRole?.canEditFees || userRole?.isAdmin) && (
               <FeesView members={members} presences={presences} meetings={meetings} guests={guests} guestPresences={guestPresences} />
             )}
-            {currentView === 'expenses' && (
+            {currentView === 'expenses' && (userRole?.canEditExpenses || userRole?.isAdmin) && (
               <ExpensesView 
                 expenses={expenses} 
                 initialCash={initialCash}
@@ -1406,6 +1416,7 @@
               <MembershipApplicationsView 
                 applications={membershipApplications} 
                 members={members}
+                userRoles={userRoles}
                 currentUser={user}
                 currentUserRole={userRole}
                 bniRoles={bniRoles}
@@ -3306,7 +3317,7 @@
     ReactDOM.render(<App />, document.getElementById('root'));
 
     // ===== VUE RAPPORTS D'ENTRETIENS DE POSTULATION =====
-    function MembershipApplicationsView({ applications, members, currentUser }) {
+    function MembershipApplicationsView({ applications, members, userRoles, currentUser, currentUserRole, bniRoles }) {
       const [showForm, setShowForm] = useState(false);
       const [editingId, setEditingId] = useState(null);
       
@@ -3755,7 +3766,7 @@
         }, 500);
       };
 
-      const cmMembers = members.filter(m => m.status === 'actif'); // Tous les membres actifs peuvent être validateurs
+      const cmMembers = userRoles ? userRoles.filter(u => u.email && u.email !== currentUser.email) : []; // Tous les utilisateurs sauf l'actuel
 
       return (
         <div>
@@ -4018,10 +4029,13 @@
                         className="form-select"
                         value={formData.validator1Email}
                         onChange={(e) => handleInputChange('validator1Email', e.target.value)}
+                        required
                       >
                         <option value="">-- Sélectionner --</option>
-                        {cmMembers.map(m => (
-                          <option key={m.id} value={m.email}>{m.name} ({m.email})</option>
+                        {cmMembers.map(u => (
+                          <option key={u.uid || u.email} value={u.email}>
+                            {u.displayName || u.email.split('@')[0]} ({u.email})
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -4031,10 +4045,13 @@
                         className="form-select"
                         value={formData.validator2Email}
                         onChange={(e) => handleInputChange('validator2Email', e.target.value)}
+                        required
                       >
                         <option value="">-- Sélectionner --</option>
-                        {cmMembers.map(m => (
-                          <option key={m.id} value={m.email}>{m.name} ({m.email})</option>
+                        {cmMembers.map(u => (
+                          <option key={u.uid || u.email} value={u.email}>
+                            {u.displayName || u.email.split('@')[0]} ({u.email})
+                          </option>
                         ))}
                       </select>
                     </div>
