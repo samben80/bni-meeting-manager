@@ -3319,11 +3319,17 @@
     // ===== VUE RAPPORTS D'ENTRETIENS DE POSTULATION =====
     function MembershipApplicationsView({ applications, members, userRoles, currentUser, currentUserRole, bniRoles }) {
       const [showForm, setShowForm] = useState(false);
+      const [showOpinionModal, setShowOpinionModal] = useState(false);
+      const [selectedApp, setSelectedApp] = useState(null);
+      const [newOpinion, setNewOpinion] = useState('favorable');
+      const [showCloseModal, setShowCloseModal] = useState(false);
+      const [closeDecision, setCloseDecision] = useState('');
       const [editingId, setEditingId] = useState(null);
       
       // Form state
       const [formData, setFormData] = useState({
         candidateName: '',
+        candidateEmail: '',
         company: '',
         yearsInBusiness: '',
         specialty: '',
@@ -3348,6 +3354,12 @@
         validator1Email: '',
         validator2Email: '',
         validations: [],
+        // Opinions
+        opinions: [],
+        isClosed: false,
+        closedAt: null,
+        closedBy: null,
+        finalDecision: null,
         status: 'pending', // pending, validated, rejected
         createdBy: currentUser.email,
         createdAt: null
@@ -3360,6 +3372,7 @@
       const resetForm = () => {
         setFormData({
           candidateName: '',
+          candidateEmail: '',
           company: '',
           yearsInBusiness: '',
           specialty: '',
@@ -3379,6 +3392,11 @@
           validator1Email: '',
           validator2Email: '',
           validations: [],
+          opinions: [],
+          isClosed: false,
+          closedAt: null,
+          closedBy: null,
+          finalDecision: null,
           status: 'pending',
           createdBy: currentUser.email,
           createdAt: null
@@ -3391,6 +3409,17 @@
         // Validation
         if (!formData.candidateName || !formData.company || !formData.specialty) {
           alert('Veuillez remplir au minimum le nom, l\'entreprise et la spécialité');
+          return;
+        }
+
+        if (!formData.candidateEmail) {
+          alert('L\'email du candidat est obligatoire pour l\'envoi de la notification');
+          return;
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(formData.candidateEmail)) {
+          alert('Format d\'email invalide');
           return;
         }
 
@@ -3433,6 +3462,7 @@
       const handleEdit = (app) => {
         setFormData({
           candidateName: app.candidateName || '',
+          candidateEmail: app.candidateEmail || '',
           company: app.company || '',
           yearsInBusiness: app.yearsInBusiness || '',
           specialty: app.specialty || '',
@@ -3452,6 +3482,11 @@
           validator1Email: app.validator1Email || '',
           validator2Email: app.validator2Email || '',
           validations: app.validations || [],
+          opinions: app.opinions || [],
+          isClosed: app.isClosed || false,
+          closedAt: app.closedAt || null,
+          closedBy: app.closedBy || null,
+          finalDecision: app.finalDecision || null,
           status: app.status || 'pending',
           createdBy: app.createdBy || '',
           createdAt: app.createdAt || null
@@ -3495,6 +3530,95 @@
         } catch (error) {
           console.error('Erreur validation:', error);
           alert('Erreur lors de la validation');
+        }
+      };
+
+      // Fonction pour ajouter un avis
+      const handleAddOpinion = async (appId, opinion) => {
+        try {
+          const app = applications.find(a => a.id === appId);
+          const newOpinionEntry = {
+            userEmail: currentUser.email,
+            userName: currentUserRole?.displayName || currentUser.email.split('@')[0],
+            opinion: opinion,
+            addedAt: new Date().toISOString(),
+          };
+
+          const updatedOpinions = [...(app.opinions || []), newOpinionEntry];
+
+          await db.collection(COLLECTION_NAMES.membershipApplications).doc(appId).update({
+            opinions: updatedOpinions,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+
+          await logActivity(
+            'Ajout avis postulation',
+            `Avis ${opinion} ajouté par ${currentUser.email} pour ${app.candidateName}`,
+            'application',
+            appId
+          );
+
+          setShowOpinionModal(false);
+          setSelectedApp(null);
+        } catch (error) {
+          console.error('Erreur ajout avis:', error);
+          alert('Erreur lors de l\'ajout de l\'avis: ' + error.message);
+        }
+      };
+
+      // Fonction pour supprimer un avis
+      const handleRemoveOpinion = async (appId, opinionIndex) => {
+        if (!confirm('Supprimer cet avis ?')) return;
+
+        try {
+          const app = applications.find(a => a.id === appId);
+          const updatedOpinions = app.opinions.filter((_, index) => index !== opinionIndex);
+
+          await db.collection(COLLECTION_NAMES.membershipApplications).doc(appId).update({
+            opinions: updatedOpinions,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+
+          await logActivity(
+            'Suppression avis postulation',
+            `Avis supprimé pour ${app.candidateName}`,
+            'application',
+            appId
+          );
+        } catch (error) {
+          console.error('Erreur suppression avis:', error);
+          alert('Erreur: ' + error.message);
+        }
+      };
+
+      // Fonction pour clôturer et envoyer email
+      const handleCloseApplication = async (appId, decision) => {
+        try {
+          const app = applications.find(a => a.id === appId);
+          
+          await db.collection(COLLECTION_NAMES.membershipApplications).doc(appId).update({
+            isClosed: true,
+            closedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            closedBy: currentUser.email,
+            finalDecision: decision,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+          });
+
+          await logActivity(
+            'Clôture postulation',
+            `Postulation clôturée (${decision}) pour ${app.candidateName}`,
+            'application',
+            appId
+          );
+
+          // TODO: Envoyer email ici avec EmailJS
+          alert(`✅ Postulation clôturée !\n\nDécision: ${decision === 'accepted' ? 'Accepté ✅' : 'Rejeté ❌'}\n\nEmail sera envoyé à: ${app.candidateEmail}\n\n(Configuration EmailJS requise pour envoi automatique)`);
+
+          setShowCloseModal(false);
+          setSelectedApp(null);
+        } catch (error) {
+          console.error('Erreur clôture:', error);
+          alert('Erreur: ' + error.message);
         }
       };
 
@@ -3814,6 +3938,20 @@
                       />
                     </div>
                     <div className="form-group">
+                      <label className="form-label">Email du Candidat *</label>
+                      <input
+                        type="email"
+                        className="form-input"
+                        value={formData.candidateEmail}
+                        onChange={(e) => handleInputChange('candidateEmail', e.target.value)}
+                        placeholder="candidat@example.com"
+                        required
+                      />
+                      <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '5px' }}>
+                        ℹ️ Obligatoire pour l'envoi de la notification de décision
+                      </p>
+                    </div>
+                    <div className="form-group">
                       <label className="form-label">Entreprise *</label>
                       <input
                         type="text"
@@ -4085,6 +4223,7 @@
                     <th>Entreprise</th>
                     <th>Spécialité</th>
                     <th>Date Visite</th>
+                    <th>Avis</th>
                     <th>Validateurs</th>
                     <th>Statut</th>
                     <th>Actions</th>
@@ -4093,7 +4232,7 @@
                 <tbody>
                   {applications.length === 0 ? (
                     <tr>
-                      <td colSpan="7" style={{ textAlign: 'center', padding: '20px' }}>
+                      <td colSpan="8" style={{ textAlign: 'center', padding: '20px' }}>
                         Aucun rapport enregistré
                       </td>
                     </tr>
@@ -4109,6 +4248,26 @@
                           <td>{app.company}</td>
                           <td>{app.specialty}</td>
                           <td>{app.visitDate ? new Date(app.visitDate).toLocaleDateString('fr-FR') : '-'}</td>
+                          <td>
+                            {app.opinions && app.opinions.length > 0 ? (
+                              <div style={{ fontSize: '12px' }}>
+                                {(() => {
+                                  const favorable = app.opinions.filter(o => o.opinion === 'favorable').length;
+                                  const defavorable = app.opinions.filter(o => o.opinion === 'defavorable').length;
+                                  const none = app.opinions.filter(o => o.opinion === 'none').length;
+                                  return (
+                                    <>
+                                      {favorable > 0 && <span style={{ color: '#059669', marginRight: '5px' }}>✅ {favorable}</span>}
+                                      {defavorable > 0 && <span style={{ color: '#dc2626', marginRight: '5px' }}>❌ {defavorable}</span>}
+                                      {none > 0 && <span style={{ color: '#6b7280' }}>⚪ {none}</span>}
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            ) : (
+                              <span style={{ color: '#9ca3af', fontSize: '12px' }}>Aucun avis</span>
+                            )}
+                          </td>
                           <td style={{ fontSize: '12px' }}>
                             <div>{app.validator1Email}</div>
                             <div>{app.validator2Email}</div>
@@ -4122,42 +4281,81 @@
                             </span>
                           </td>
                           <td>
-                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                              {isFullyValidated && (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                              {/* Bouton Ajouter Avis */}
+                              {!app.isClosed && (
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ padding: '6px 10px', fontSize: '11px', width: '100%' }}
+                                  onClick={() => {
+                                    setSelectedApp(app);
+                                    setNewOpinion('favorable');
+                                    setShowOpinionModal(true);
+                                  }}
+                                  title="Ajouter votre avis"
+                                >
+                                  💬 Avis
+                                </button>
+                              )}
+
+                              {/* Bouton Clôturer (visible seulement si canCloseApplications) */}
+                              {!app.isClosed && currentUserRole?.canCloseApplications && (
                                 <button
                                   className="btn btn-primary"
-                                  style={{ padding: '8px 12px', fontSize: '12px' }}
+                                  style={{ padding: '6px 10px', fontSize: '11px', width: '100%', backgroundColor: '#C8102E' }}
+                                  onClick={() => {
+                                    setSelectedApp(app);
+                                    setCloseDecision('');
+                                    setShowCloseModal(true);
+                                  }}
+                                  title="Clôturer la postulation"
+                                >
+                                  🔒 Clôturer
+                                </button>
+                              )}
+
+                              {/* Badge si déjà clôturé */}
+                              {app.isClosed && (
+                                <span className="badge badge-success" style={{ fontSize: '11px', padding: '6px' }}>
+                                  ✓ Clôturé ({app.finalDecision === 'accepted' ? 'Accepté' : 'Rejeté'})
+                                </span>
+                              )}
+
+                              {/* Boutons existants */}
+                              {isFullyValidated && (
+                                <button
+                                  className="btn btn-secondary"
+                                  style={{ padding: '6px 10px', fontSize: '11px', width: '100%' }}
                                   onClick={() => generatePDF(app)}
-                                  title="Générer PDF"
                                 >
                                   📄 PDF
                                 </button>
                               )}
+
                               {isValidator && !hasValidated && !isFullyValidated && (
                                 <button
                                   className="btn btn-success"
-                                  style={{ padding: '8px 12px', fontSize: '12px' }}
+                                  style={{ padding: '6px 10px', fontSize: '11px', width: '100%' }}
                                   onClick={() => handleValidate(app.id, app)}
-                                  title="Valider"
                                 >
                                   ✓ Valider
                                 </button>
                               )}
+
                               <button
                                 className="btn btn-secondary"
-                                style={{ padding: '8px 12px', fontSize: '12px' }}
+                                style={{ padding: '6px 10px', fontSize: '11px', width: '100%' }}
                                 onClick={() => handleEdit(app)}
-                                title="Modifier"
                               >
-                                ✏️
+                                ✏️ Modifier
                               </button>
+
                               <button
                                 className="btn btn-danger"
-                                style={{ padding: '8px 12px', fontSize: '12px' }}
+                                style={{ padding: '6px 10px', fontSize: '11px', width: '100%' }}
                                 onClick={() => handleDelete(app.id, app.candidateName)}
-                                title="Supprimer"
                               >
-                                🗑️
+                                🗑️ Supprimer
                               </button>
                             </div>
                           </td>
@@ -4169,6 +4367,170 @@
               </table>
             </div>
           </div>
+
+          {/* Modal Ajouter Avis */}
+          {showOpinionModal && selectedApp && (
+            <div className="modal-overlay" onClick={() => setShowOpinionModal(false)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '500px' }}>
+                <h3 style={{ marginBottom: '20px', color: '#C8102E' }}>
+                  💬 Ajouter votre avis
+                </h3>
+
+                <div style={{ marginBottom: '20px', padding: '15px', background: '#f9fafb', borderRadius: '8px' }}>
+                  <strong>Candidat :</strong> {selectedApp.candidateName}<br />
+                  <strong>Entreprise :</strong> {selectedApp.company}
+                </div>
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label className="form-label">Votre avis *</label>
+                  <select
+                    className="form-select"
+                    value={newOpinion}
+                    onChange={(e) => setNewOpinion(e.target.value)}
+                    style={{ fontSize: '16px', padding: '12px' }}
+                  >
+                    <option value="favorable">✅ Favorable</option>
+                    <option value="defavorable">❌ Défavorable</option>
+                    <option value="none">⚪ Pas d'avis</option>
+                  </select>
+                </div>
+
+                {/* Liste des avis existants */}
+                {selectedApp.opinions && selectedApp.opinions.length > 0 && (
+                  <div style={{ marginBottom: '20px' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '10px' }}>Avis déjà donnés :</h4>
+                    <div style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px' }}>
+                      {selectedApp.opinions.map((op, index) => (
+                        <div key={index} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px', borderBottom: index < selectedApp.opinions.length - 1 ? '1px solid #f3f4f6' : 'none' }}>
+                          <div style={{ fontSize: '13px' }}>
+                            <strong>{op.userName}</strong>
+                            <br />
+                            {op.opinion === 'favorable' && <span style={{ color: '#059669' }}>✅ Favorable</span>}
+                            {op.opinion === 'defavorable' && <span style={{ color: '#dc2626' }}>❌ Défavorable</span>}
+                            {op.opinion === 'none' && <span style={{ color: '#6b7280' }}>⚪ Pas d'avis</span>}
+                            <br />
+                            <span style={{ color: '#9ca3af', fontSize: '11px' }}>
+                              {new Date(op.addedAt).toLocaleDateString('fr-FR')}
+                            </span>
+                          </div>
+                          {op.userEmail === currentUser.email && (
+                            <button
+                              className="btn btn-danger"
+                              style={{ padding: '4px 8px', fontSize: '11px' }}
+                              onClick={() => handleRemoveOpinion(selectedApp.id, index)}
+                            >
+                              🗑️
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div className="btn-group">
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => handleAddOpinion(selectedApp.id, newOpinion)}
+                  >
+                    ✓ Ajouter mon avis
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setShowOpinionModal(false)}
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modal Clôturer */}
+          {showCloseModal && selectedApp && (
+            <div className="modal-overlay" onClick={() => setShowCloseModal(false)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+                <h3 style={{ marginBottom: '20px', color: '#C8102E' }}>
+                  🔒 Clôturer la postulation
+                </h3>
+
+                <div style={{ marginBottom: '20px', padding: '15px', background: '#f9fafb', borderRadius: '8px' }}>
+                  <strong>Candidat :</strong> {selectedApp.candidateName}<br />
+                  <strong>Email :</strong> {selectedApp.candidateEmail}<br />
+                  <strong>Entreprise :</strong> {selectedApp.company}
+                </div>
+
+                {/* Résumé des avis */}
+                {selectedApp.opinions && selectedApp.opinions.length > 0 && (
+                  <div style={{ marginBottom: '20px', padding: '15px', background: '#fff', border: '2px solid #e5e7eb', borderRadius: '8px' }}>
+                    <h4 style={{ fontSize: '14px', marginBottom: '10px' }}>📊 Résumé des avis :</h4>
+                    {(() => {
+                      const favorable = selectedApp.opinions.filter(o => o.opinion === 'favorable').length;
+                      const defavorable = selectedApp.opinions.filter(o => o.opinion === 'defavorable').length;
+                      const none = selectedApp.opinions.filter(o => o.opinion === 'none').length;
+                      const suggested = favorable > defavorable ? 'accepted' : (defavorable > favorable ? 'rejected' : '');
+                      
+                      return (
+                        <>
+                          <div style={{ fontSize: '16px', marginBottom: '10px' }}>
+                            <span style={{ color: '#059669', marginRight: '15px' }}>✅ Favorable: <strong>{favorable}</strong></span>
+                            <span style={{ color: '#dc2626', marginRight: '15px' }}>❌ Défavorable: <strong>{defavorable}</strong></span>
+                            <span style={{ color: '#6b7280' }}>⚪ Pas d'avis: <strong>{none}</strong></span>
+                          </div>
+                          {suggested && (
+                            <div style={{ padding: '10px', background: suggested === 'accepted' ? '#d1fae5' : '#fee2e2', borderRadius: '6px', marginTop: '10px' }}>
+                              <strong>💡 Décision suggérée :</strong> {suggested === 'accepted' ? '✅ Accepter' : '❌ Rejeter'}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </div>
+                )}
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label className="form-label">Décision finale *</label>
+                  <select
+                    className="form-select"
+                    value={closeDecision}
+                    onChange={(e) => setCloseDecision(e.target.value)}
+                    style={{ fontSize: '16px', padding: '12px' }}
+                  >
+                    <option value="">-- Sélectionner --</option>
+                    <option value="accepted">✅ Accepter la candidature</option>
+                    <option value="rejected">❌ Rejeter la candidature</option>
+                  </select>
+                </div>
+
+                <div className="alert alert-info" style={{ marginBottom: '20px', fontSize: '13px' }}>
+                  <strong>ℹ️ Information :</strong><br />
+                  Un email sera automatiquement envoyé à <strong>{selectedApp.candidateEmail}</strong> avec votre décision.
+                </div>
+
+                <div className="btn-group">
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => {
+                      if (!closeDecision) {
+                        alert('Veuillez sélectionner une décision');
+                        return;
+                      }
+                      handleCloseApplication(selectedApp.id, closeDecision);
+                    }}
+                    style={{ backgroundColor: '#C8102E' }}
+                  >
+                    ✓ Confirmer et Envoyer Email
+                  </button>
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => setShowCloseModal(false)}
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
