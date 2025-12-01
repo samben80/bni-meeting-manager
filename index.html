@@ -4759,8 +4759,10 @@
       const [canManageUsers, setCanManageUsers] = useState(false);
       const [canViewReports, setCanViewReports] = useState(true);
       const [canManageApplications, setCanManageApplications] = useState(false);
+      const [canCloseApplications, setCanCloseApplications] = useState(false);
       const [message, setMessage] = useState({ type: '', text: '' });
       const [loading, setLoading] = useState(false);
+      const [editingUserId, setEditingUserId] = useState(null);
 
       const handleCreateUser = async (e) => {
         e.preventDefault();
@@ -4841,6 +4843,83 @@
         }
       };
 
+      const handleEditUser = (role) => {
+        setEditingUserId(role.uid);
+        setEmail(role.email);
+        setDisplayName(role.displayName || '');
+        setIsAdmin(role.isAdmin || false);
+        setCanEditMembers(role.canEditMembers || false);
+        setCanEditMeetings(role.canEditMeetings || false);
+        setCanEditGuests(role.canEditGuests || false);
+        setCanEditFees(role.canEditFees || false);
+        setCanEditExpenses(role.canEditExpenses || false);
+        setCanManageUsers(role.canManageUsers || false);
+        setCanViewReports(role.canViewReports !== undefined ? role.canViewReports : true);
+        setCanManageApplications(role.canManageApplications || false);
+        setCanCloseApplications(role.canCloseApplications || false);
+        setPassword('');
+      };
+
+      const handleCancelEdit = () => {
+        setEditingUserId(null);
+        setEmail('');
+        setPassword('');
+        setDisplayName('');
+        setIsAdmin(false);
+        setCanEditMembers(false);
+        setCanEditMeetings(false);
+        setCanEditGuests(false);
+        setCanEditFees(false);
+        setCanEditExpenses(false);
+        setCanManageUsers(false);
+        setCanViewReports(true);
+        setCanManageApplications(false);
+        setCanCloseApplications(false);
+      };
+
+      const handleUpdateUser = async () => {
+        setMessage({ type: '', text: '' });
+        setLoading(true);
+
+        try {
+          await db.collection(COLLECTION_NAMES.userRoles).doc(editingUserId).update({
+            displayName: displayName || email.split('@')[0],
+            isAdmin: isAdmin,
+            canEditMembers: canEditMembers,
+            canEditMeetings: canEditMeetings,
+            canEditGuests: canEditGuests,
+            canEditFees: canEditFees,
+            canEditExpenses: canEditExpenses,
+            canManageUsers: canManageUsers,
+            canViewReports: canViewReports,
+            canManageApplications: canManageApplications,
+            canCloseApplications: canCloseApplications,
+            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            updatedBy: currentUser.email
+          });
+
+          await logActivity('Modification utilisateur', 'Permissions modifiées pour: ' + email, 'user', editingUserId);
+          
+          setMessage({ type: 'success', text: 'Utilisateur mis à jour avec succès' });
+          handleCancelEdit();
+        } catch (error) {
+          console.error('Erreur mise à jour:', error);
+          setMessage({ type: 'error', text: 'Erreur lors de la mise à jour: ' + error.message });
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      const handleSubmitUser = async (e) => {
+        e.preventDefault();
+        
+        if (editingUserId) {
+          await handleUpdateUser();
+        } else {
+          await handleCreateUser(e);
+        }
+      };
+
       const handleDeleteUser = async (uid, userEmail) => {
         const confirmMsg = 'Supprimer l utilisateur ' + userEmail + ' ? L utilisateur ne pourra plus se connecter.';
         if (!confirm(confirmMsg)) {
@@ -4880,7 +4959,9 @@
       return (
         <div>
           <div className="card">
-            <div className="card-title">👤 Créer un nouvel utilisateur</div>
+            <div className="card-title">
+              {editingUserId ? '✏️ Modifier un utilisateur' : '👤 Créer un nouvel utilisateur'}
+            </div>
             
             {message.text && (
               <div className={'alert alert-' + message.type}>
@@ -4888,7 +4969,7 @@
               </div>
             )}
 
-            <form onSubmit={handleCreateUser}>
+            <form onSubmit={handleSubmitUser}>
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Email *</label>
@@ -4898,19 +4979,23 @@
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="utilisateur@exemple.com"
+                    disabled={editingUserId}
                     required
                   />
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Mot de passe * (min 6 caractères)</label>
+                  <label className="form-label">
+                    Mot de passe {!editingUserId && '* (min 6 caractères)'}
+                    {editingUserId && '(laisser vide pour ne pas changer)'}
+                  </label>
                   <input
                     type="password"
                     className="form-input"
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••"
+                    placeholder={editingUserId ? 'Laisser vide = pas de changement' : '••••••••'}
                     minLength="6"
-                    required
+                    required={!editingUserId}
                   />
                 </div>
                 <div className="form-group">
@@ -5026,13 +5111,34 @@
                     />
                     <label htmlFor="perm-applications">📝 Gérer les postulations</label>
                   </div>
+
+                  <div className="form-checkbox">
+                    <input
+                      type="checkbox"
+                      id="perm-close-applications"
+                      checked={canCloseApplications}
+                      onChange={(e) => setCanCloseApplications(e.target.checked)}
+                      disabled={isAdmin}
+                    />
+                    <label htmlFor="perm-close-applications">🔒 Clôturer les postulations</label>
+                  </div>
                 </div>
               </div>
 
               <div className="btn-group">
                 <button type="submit" className="btn btn-primary" disabled={loading}>
-                  {loading ? '⏳ Création...' : '➕ Créer l utilisateur'}
+                  {loading ? '⏳ En cours...' : (editingUserId ? '✏️ Mettre à jour' : '➕ Créer l utilisateur')}
                 </button>
+                {editingUserId && (
+                  <button 
+                    type="button" 
+                    className="btn btn-secondary" 
+                    onClick={handleCancelEdit}
+                    style={{ marginLeft: '10px' }}
+                  >
+                    ✖️ Annuler
+                  </button>
+                )}
               </div>
             </form>
 
@@ -5093,17 +5199,29 @@
                             )}
                           </td>
                           <td>
-                            {!isCurrentUser && (
+                            <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                               <button
-                                className="btn btn-danger"
-                                onClick={() => handleDeleteUser(role.uid, role.email)}
+                                className="btn btn-secondary"
+                                style={{ padding: '8px 12px', fontSize: '12px' }}
+                                onClick={() => handleEditUser(role)}
+                                title="Modifier les permissions"
                               >
-                                🗑️ Supprimer
+                                ✏️ Modifier
                               </button>
-                            )}
-                            {isCurrentUser && (
-                              <span className="badge badge-success">✓ Vous</span>
-                            )}
+                              {!isCurrentUser && (
+                                <button
+                                  className="btn btn-danger"
+                                  style={{ padding: '8px 12px', fontSize: '12px' }}
+                                  onClick={() => handleDeleteUser(role.uid, role.email)}
+                                  title="Supprimer l'utilisateur"
+                                >
+                                  🗑️ Supprimer
+                                </button>
+                              )}
+                              {isCurrentUser && (
+                                <span className="badge badge-success">✓ Vous</span>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       );
