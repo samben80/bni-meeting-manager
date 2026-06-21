@@ -843,6 +843,29 @@
       if (isMemberInactiveForMeeting(member, meeting, presence)) return 0;
       return presence.due != null ? presence.due : DUE_PER_MEETING;
     }
+
+    // Le dû se base sur le NOMBRE DE RÉUNIONS créées (× 200), pas sur les présences saisies.
+    function countActiveMeetings(member, meetings, presences) {
+      let n = 0;
+      (meetings || []).forEach(meeting => {
+        const presence = (presences || []).find(p => p.memberId === (member && member.id) && p.meetingId === meeting.id);
+        if (!isMemberInactiveForMeeting(member, meeting, presence)) n++;
+      });
+      return n;
+    }
+    function getMemberTotalCharge(member, meetings, presences) {
+      return countActiveMeetings(member, meetings, presences) * DUE_PER_MEETING;
+    }
+    function meetingsOfMonth(meetings, monthKey) {
+      return (meetings || []).filter(m => {
+        if (!m.date) return false;
+        const d = new Date(m.date);
+        return (d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0')) === monthKey;
+      });
+    }
+    function getMemberMonthCharge(member, meetings, presences, monthKey) {
+      return countActiveMeetings(member, meetingsOfMonth(meetings, monthKey), presences) * DUE_PER_MEETING;
+    }
     const COLLECTION_NAMES = {
       members: 'members',
       meetings: 'meetings',
@@ -1452,7 +1475,7 @@
       const totalPossible = meetings.length * members.filter(m => m.status === 'actif').length;
       const presenceRate = totalPossible > 0 ? (totalPresences / totalPossible * 100) : 0;
 
-      const totalDueFees = presences.reduce((sum, p) => sum + getPresenceDue(p, members, meetings), 0);
+      const totalDueFees = members.reduce((sum, m) => sum + getMemberTotalCharge(m, meetings, presences), 0);
       const totalPaidFees = presences.reduce((sum, p) => sum + (p.amount || 0), 0);
       const totalGuestPayments = guests.reduce((sum, g) => sum + (g.payment || 0), 0);
       const totalExpensesAmount = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
@@ -2277,11 +2300,9 @@
       };
 
       const getMemberStats = (memberId) => {
-        if (!presences || presences.length === 0) {
-          return { totalDue: 0, totalPaid: 0, remaining: 0 };
-        }
-        const memberPresences = presences.filter(p => p.memberId === memberId);
-        const totalDue = memberPresences.reduce((sum, p) => sum + getPresenceDue(p, members, meetings || []), 0);
+        const member = members.find(m => m.id === memberId);
+        const memberPresences = (presences || []).filter(p => p.memberId === memberId);
+        const totalDue = getMemberTotalCharge(member, meetings || [], presences || []);
         const totalPaid = memberPresences.reduce((sum, p) => sum + (p.amount || 0), 0);
         const remaining = totalDue - totalPaid;
         return { totalDue, totalPaid, remaining };
@@ -2991,8 +3012,8 @@
             months: {}
           };
 
+          let carry = 0; // reste non payé reporté du mois précédent
           months.forEach(monthKey => {
-            const [year, month] = monthKey.split('-');
             const memberPresencesThisMonth = presences.filter(p => {
               if (p.memberId !== member.id) return false;
               const meeting = meetings.find(m => m.id === p.meetingId);
@@ -3002,16 +3023,16 @@
               return meetingMonth === monthKey;
             });
 
-            const totalDue = memberPresencesThisMonth.reduce((sum, p) => {
-              const baseDue = getPresenceDue(p, members, meetings);
-              const guestFees = p.guestFees || 0;
-              return sum + baseDue + guestFees;
-            }, 0);
-            const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
             const guestFeesTotal = memberPresencesThisMonth.reduce((sum, p) => sum + (p.guestFees || 0), 0);
-            const remaining = totalDue - totalPaid;
+            // Charge du mois = nb réunions du mois (membre actif) × 200 + frais invités
+            const charge = getMemberMonthCharge(member, meetings, presences, monthKey) + guestFeesTotal;
+            const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const totalDue = charge + carry; // total dû = charges du mois + reste du mois précédent
+            const remaining = totalDue - totalPaid; // reporté au mois suivant
+            carry = remaining;
 
             data[member.id].months[monthKey] = {
+              charge,
               totalDue,
               guestFees: guestFeesTotal,
               totalPaid,
@@ -3110,7 +3131,7 @@
                               color: monthData.remaining > 0 ? '#dc2626' : monthData.remaining < 0 ? '#10b981' : '#9ca3af',
                               fontWeight: monthData.remaining !== 0 ? 'bold' : 'normal'
                             }}>
-                              {monthData.totalDue > 0 ? formatInteger(monthData.remaining) : '-'}
+                              {(monthData.totalDue !== 0 || monthData.remaining !== 0) ? formatInteger(monthData.remaining) : '-'}
                             </td>
                           </React.Fragment>
                         );
@@ -4704,6 +4725,7 @@
             months: {}
           };
 
+          let carry = 0; // reste non payé reporté du mois précédent
           last6Months.forEach(({ key: monthKey }) => {
             const memberPresencesThisMonth = presences.filter(p => {
               if (p.memberId !== member.id) return false;
@@ -4714,17 +4736,20 @@
               return meetingMonth === monthKey;
             });
 
-            const totalDue = memberPresencesThisMonth.reduce((sum, p) => {
-              return sum + getPresenceDue(p, members, meetings) + (p.guestFees || 0);
-            }, 0);
+            const activeCount = countActiveMeetings(member, meetingsOfMonth(meetings, monthKey), presences);
+            const guestFeesTotal = memberPresencesThisMonth.reduce((sum, p) => sum + (p.guestFees || 0), 0);
+            const charge = activeCount * DUE_PER_MEETING + guestFeesTotal;
             const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
+            const totalDue = charge + carry;
             const remaining = totalDue - totalPaid;
+            carry = remaining;
 
             data[member.id].months[monthKey] = {
+              charge,
               totalDue,
               totalPaid,
               remaining,
-              meetingsCount: memberPresencesThisMonth.length
+              meetingsCount: activeCount
             };
           });
         });
@@ -4849,9 +4874,9 @@
                         <td><strong>{data.name}</strong></td>
                         {last6Months.map(month => {
                           const monthData = data.months[month.key];
-                          totalDueAll += monthData.totalDue;
+                          totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
-                          totalRemainingAll += monthData.remaining;
+                          totalRemainingAll += monthData.charge - monthData.totalPaid;
 
                           return (
                             <React.Fragment key={month.key}>
@@ -4914,22 +4939,22 @@
                       <tbody>
                         {last6Months.map(month => {
                           const monthData = data.months[month.key];
-                          totalDueAll += monthData.totalDue;
+                          totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
-                          totalRemainingAll += monthData.remaining;
+                          totalRemainingAll += monthData.charge - monthData.totalPaid;
 
                           return (
                             <tr key={month.key}>
                               <td><strong>{month.label}</strong></td>
                               <td style={{ textAlign: 'center' }}>{monthData.meetingsCount}</td>
                               <td style={{ textAlign: 'right' }}>
-                                {monthData.formatCurrency(totalDue)}
+                                {formatInteger(monthData.totalDue)}
                               </td>
                               <td style={{ textAlign: 'right' }}>
-                                {monthData.formatCurrency(totalPaid)}
+                                {formatInteger(monthData.totalPaid)}
                               </td>
                               <td style={{ textAlign: 'right', fontWeight: monthData.remaining > 0 ? 'bold' : 'normal' }}>
-                                {monthData.formatCurrency(remaining)}
+                                {formatInteger(monthData.remaining)}
                               </td>
                             </tr>
                           );
