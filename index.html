@@ -1789,6 +1789,7 @@
           [memberId]: {
             ...prev[memberId],
             activity: value,
+            activityDirty: true,
             inactiveSingle: value === 'inactive_single'
           }
         }));
@@ -1842,7 +1843,7 @@
             const desiredFrom = activity === 'inactive_from' ? meeting.date : null;
             const curUntil = (memberObj && memberObj.inactiveUntil) || null;
             const curFrom = (memberObj && memberObj.inactiveFrom) || null;
-            if (memberObj && (desiredUntil !== curUntil || desiredFrom !== curFrom)) {
+            if (memberObj && data.activityDirty && (desiredUntil !== curUntil || desiredFrom !== curFrom)) {
               batch.update(db.collection(COLLECTION_NAMES.members).doc(memberId), {
                 inactiveUntil: desiredUntil,
                 inactiveFrom: desiredFrom,
