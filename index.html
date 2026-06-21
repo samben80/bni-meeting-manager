@@ -827,6 +827,22 @@
 
     const DUE_PER_MEETING = 200;
     const GUEST_FEE = 200; // Coût d'un invité
+
+    // ===== ACTIVITÉ MEMBRE (statut par réunion) =====
+    // Un membre inactif pour une réunion ne compte pas dans le total dû.
+    function isMemberInactiveForMeeting(member, meeting, presence) {
+      if (presence && presence.inactiveSingle) return true;
+      if (!member || !meeting || !meeting.date) return false;
+      if (member.inactiveUntil && meeting.date <= member.inactiveUntil) return true;
+      if (member.inactiveFrom && meeting.date >= member.inactiveFrom) return true;
+      return false;
+    }
+    function getPresenceDue(presence, members, meetings) {
+      const member = (members || []).find(m => m.id === presence.memberId);
+      const meeting = (meetings || []).find(m => m.id === presence.meetingId);
+      if (isMemberInactiveForMeeting(member, meeting, presence)) return 0;
+      return presence.due != null ? presence.due : DUE_PER_MEETING;
+    }
     const COLLECTION_NAMES = {
       members: 'members',
       meetings: 'meetings',
@@ -1388,7 +1404,7 @@
               />
             )}
             {currentView === 'members' && (userRole?.canEditMembers || userRole?.isAdmin) && (
-              <MembersView members={members} presences={presences} />
+              <MembersView members={members} presences={presences} meetings={meetings} />
             )}
             {currentView === 'guests' && (userRole?.canEditGuests || userRole?.isAdmin) && (
               <GuestsView guests={guests} meetings={meetings} members={members} />
@@ -1436,7 +1452,7 @@
       const totalPossible = meetings.length * members.filter(m => m.status === 'actif').length;
       const presenceRate = totalPossible > 0 ? (totalPresences / totalPossible * 100) : 0;
 
-      const totalDueFees = presences.reduce((sum, p) => sum + (p.due || DUE_PER_MEETING), 0);
+      const totalDueFees = presences.reduce((sum, p) => sum + getPresenceDue(p, members, meetings), 0);
       const totalPaidFees = presences.reduce((sum, p) => sum + (p.amount || 0), 0);
       const totalGuestPayments = guests.reduce((sum, g) => sum + (g.payment || 0), 0);
       const totalExpensesAmount = expenses.reduce((sum, e) => sum + (e.amount || 0), 0);
@@ -1685,12 +1701,13 @@
         presences.forEach(p => {
           initial[p.memberId] = {
             status: p.status || 'absent',
-            amount: p.amount || 0
+            amount: p.amount || 0,
+            inactiveSingle: p.inactiveSingle || false
           };
         });
         members.forEach(m => {
           if (!initial[m.id]) {
-            initial[m.id] = { status: 'absent', amount: 0 };
+            initial[m.id] = { status: 'absent', amount: 0, inactiveSingle: false };
           }
         });
         setLocalPresences(initial);
@@ -1726,6 +1743,46 @@
         
         setLocalGuestPresences(initial);
       }, [guestPresences, guests, meeting.id]);
+
+      const getActivityValue = (member) => {
+        const lp = localPresences[member.id] || {};
+        if (lp.inactiveSingle) return 'inactive_single';
+        if (member.inactiveUntil && meeting.date <= member.inactiveUntil) return 'inactive_until';
+        if (member.inactiveFrom && meeting.date >= member.inactiveFrom) return 'inactive_from';
+        return 'active';
+      };
+
+      const handleActivityChange = async (memberId, value) => {
+        const member = members.find(m => m.id === memberId);
+        if (!member) return;
+        if (value === 'inactive_single') {
+          handlePresenceChange(memberId, 'inactiveSingle', true);
+          return;
+        }
+        handlePresenceChange(memberId, 'inactiveSingle', false);
+        try {
+          if (value === 'inactive_until') {
+            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
+              inactiveUntil: meeting.date,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } else if (value === 'inactive_from') {
+            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
+              inactiveFrom: meeting.date,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          } else {
+            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
+              inactiveFrom: null,
+              inactiveUntil: null,
+              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+            });
+          }
+        } catch (error) {
+          console.error('Erreur mise à jour activité:', error);
+          alert('Erreur lors de la mise a jour du statut d activite');
+        }
+      };
 
       const handlePresenceChange = (memberId, field, value) => {
         setLocalPresences(prev => ({
@@ -1767,12 +1824,15 @@
             const existingPresence = presences.find(p => p.memberId === memberId);
             const extraCost = memberExtraCosts[memberId] || 0;
             
+            const memberObj = members.find(m => m.id === memberId);
+            const isInactive = isMemberInactiveForMeeting(memberObj, meeting, data);
             const presenceData = {
               meetingId: meeting.id,
               memberId: memberId,
               status: data.status,
               amount: data.amount,
-              due: DUE_PER_MEETING,
+              due: isInactive ? 0 : DUE_PER_MEETING,
+              inactiveSingle: data.inactiveSingle || false,
               guestFees: extraCost,
               updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
               updatedBy: auth.currentUser.email
@@ -1876,20 +1936,37 @@
               <thead>
                 <tr>
                   <th>Membre</th>
+                  <th>Activité</th>
                   <th>Présence</th>
                   <th>Cotisation payée (MAD)</th>
                 </tr>
               </thead>
               <tbody>
-                {members.filter(m => m.status === 'actif').map(member => (
-                  <tr key={member.id}>
+                {members.filter(m => m.status === 'actif').map(member => {
+                  const activity = getActivityValue(member);
+                  const inactive = activity !== 'active';
+                  return (
+                  <tr key={member.id} style={inactive ? { opacity: 0.55, background: '#f3f4f6' } : null}>
                     <td><strong>{member.name}</strong></td>
+                    <td>
+                      <select
+                        className="form-select"
+                        value={activity}
+                        onChange={(e) => handleActivityChange(member.id, e.target.value)}
+                        disabled={meeting.status === 'closed'}
+                      >
+                        <option value="active">🟢 Actif</option>
+                        <option value="inactive_single">⏸️ Inactif (cette réunion)</option>
+                        <option value="inactive_until">⬅️ Inactif (jusqu'à cette réunion)</option>
+                        <option value="inactive_from">➡️ Inactif (à partir de cette réunion)</option>
+                      </select>
+                    </td>
                     <td>
                       <select
                         className="form-select"
                         value={localPresences[member.id]?.status || 'absent'}
                         onChange={(e) => handlePresenceChange(member.id, 'status', e.target.value)}
-                        disabled={meeting.status === 'closed'}
+                        disabled={meeting.status === 'closed' || inactive}
                       >
                         <option value="present">✅ Présent</option>
                         <option value="absent">❌ Absent</option>
@@ -1898,18 +1975,23 @@
                       </select>
                     </td>
                     <td>
-                      <input
-                        type="number"
-                        className="form-input"
-                        value={localPresences[member.id]?.amount || 0}
-                        onChange={(e) => handlePresenceChange(member.id, 'amount', e.target.value)}
-                        disabled={meeting.status === 'closed'}
-                        min="0"
-                        step="10"
-                      />
+                      {inactive ? (
+                        <span style={{ color: '#9ca3af' }}>— non dû</span>
+                      ) : (
+                        <input
+                          type="number"
+                          className="form-input"
+                          value={localPresences[member.id]?.amount || 0}
+                          onChange={(e) => handlePresenceChange(member.id, 'amount', e.target.value)}
+                          disabled={meeting.status === 'closed'}
+                          min="0"
+                          step="10"
+                        />
+                      )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -2019,7 +2101,7 @@
     }
 
     // ===== VUE MEMBRES =====
-    function MembersView({ members, presences }) {
+    function MembersView({ members, presences, meetings }) {
       const [name, setName] = useState('');
       const [phone, setPhone] = useState('');
       const [email, setEmail] = useState('');
@@ -2199,7 +2281,7 @@
           return { totalDue: 0, totalPaid: 0, remaining: 0 };
         }
         const memberPresences = presences.filter(p => p.memberId === memberId);
-        const totalDue = memberPresences.reduce((sum, p) => sum + (p.due || DUE_PER_MEETING), 0);
+        const totalDue = memberPresences.reduce((sum, p) => sum + getPresenceDue(p, members, meetings || []), 0);
         const totalPaid = memberPresences.reduce((sum, p) => sum + (p.amount || 0), 0);
         const remaining = totalDue - totalPaid;
         return { totalDue, totalPaid, remaining };
@@ -2921,7 +3003,7 @@
             });
 
             const totalDue = memberPresencesThisMonth.reduce((sum, p) => {
-              const baseDue = p.due || DUE_PER_MEETING;
+              const baseDue = getPresenceDue(p, members, meetings);
               const guestFees = p.guestFees || 0;
               return sum + baseDue + guestFees;
             }, 0);
@@ -3129,7 +3211,7 @@
                       .map(presence => {
                         const member = members.find(m => m.id === presence.memberId);
                         const meeting = meetings.find(m => m.id === presence.meetingId);
-                        const due = (presence.due || DUE_PER_MEETING) + (presence.guestFees || 0);
+                        const due = getPresenceDue(presence, members, meetings) + (presence.guestFees || 0);
                         const paid = presence.amount || 0;
                         const remaining = due - paid;
                         
@@ -4633,7 +4715,7 @@
             });
 
             const totalDue = memberPresencesThisMonth.reduce((sum, p) => {
-              return sum + (p.due || DUE_PER_MEETING) + (p.guestFees || 0);
+              return sum + getPresenceDue(p, members, meetings) + (p.guestFees || 0);
             }, 0);
             const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
             const remaining = totalDue - totalPaid;
