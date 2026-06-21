@@ -3207,16 +3207,13 @@
                   <tr>
                     <th>Date</th>
                     <th>Membre</th>
-                    <th>Statut présence</th>
-                    <th>Dû (MAD)</th>
                     <th>Payé (MAD)</th>
-                    <th>Reste (MAD)</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredPresences.length === 0 ? (
                     <tr>
-                      <td colSpan="6" style={{ textAlign: 'center', padding: '20px' }}>
+                      <td colSpan="3" style={{ textAlign: 'center', padding: '20px' }}>
                         {selectedMember || selectedDate ? 
                           'Aucun paiement ne correspond aux filtres' : 
                           'Aucun paiement enregistré'}
@@ -3232,35 +3229,13 @@
                       .map(presence => {
                         const member = members.find(m => m.id === presence.memberId);
                         const meeting = meetings.find(m => m.id === presence.meetingId);
-                        const due = getPresenceDue(presence, members, meetings) + (presence.guestFees || 0);
                         const paid = presence.amount || 0;
-                        const remaining = due - paid;
-                        
+
                         return (
                           <tr key={presence.id}>
                             <td>{meeting ? new Date(meeting.date).toLocaleDateString('fr-FR') : 'N/A'}</td>
                             <td>{member ? member.name : 'Membre inconnu'}</td>
-                            <td>
-                              <span className={`badge ${
-                                presence.status === 'present' ? 'badge-success' :
-                                presence.status === 'suppleant' ? 'badge-info' :
-                                presence.status === 'malade' ? 'badge-warning' : 'badge-danger'
-                              }`}>
-                                {presence.status === 'present' ? '✅ Présent' :
-                                 presence.status === 'suppleant' ? '👤 Suppléant' :
-                                 presence.status === 'malade' ? '🤒 Malade' : '❌ Absent'}
-                              </span>
-                            </td>
-                            <td>{formatInteger(due)} MAD</td>
                             <td style={{ color: '#10b981', fontWeight: 'bold' }}>{formatInteger(paid)} MAD</td>
-                            <td>
-                              <span style={{ 
-                                color: remaining > 0 ? '#dc2626' : '#10b981',
-                                fontWeight: 'bold'
-                              }}>
-                                {formatInteger(remaining)} MAD
-                              </span>
-                            </td>
                           </tr>
                         );
                       })
