@@ -3147,7 +3147,7 @@
                       const sumDue = rows.reduce((s, d) => s + (d.totalDue || 0), 0);
                       const sumGuest = rows.reduce((s, d) => s + (d.guestFees || 0), 0);
                       const sumPaid = rows.reduce((s, d) => s + (d.totalPaid || 0), 0);
-                      const sumRem = rows.reduce((s, d) => s + (d.remaining || 0), 0);
+                      const sumRem = rows.reduce((s, d) => s + Math.max(0, d.remaining || 0), 0); // les avances (reste négatif) ne diminuent pas le total à payer
                       return (
                         <React.Fragment key={monthKey}>
                           <td style={{ borderLeft: '2px solid #e5e7eb' }}>{formatInteger(sumDue)} MAD</td>
