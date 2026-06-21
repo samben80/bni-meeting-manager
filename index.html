@@ -3027,9 +3027,9 @@
             // Charge du mois = nb réunions du mois (membre actif) × 200 + frais invités
             const charge = getMemberMonthCharge(member, meetings, presences, monthKey) + guestFeesTotal;
             const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
-            const totalDue = charge + carry; // total dû = charges du mois + reste du mois précédent
-            const remaining = totalDue - totalPaid; // reporté au mois suivant
-            carry = remaining;
+            const totalDue = charge + carry; // total dû = charges du mois + reste positif du mois précédent
+            const remaining = totalDue - totalPaid;
+            carry = remaining > 0 ? remaining : 0; // on ne reporte que le reste positif (les avances ne sont pas reportées)
 
             data[member.id].months[monthKey] = {
               charge,
@@ -4737,7 +4737,7 @@
             const totalPaid = memberPresencesThisMonth.reduce((sum, p) => sum + (p.amount || 0), 0);
             const totalDue = charge + carry;
             const remaining = totalDue - totalPaid;
-            carry = remaining;
+            carry = remaining > 0 ? remaining : 0; // on ne reporte que le reste positif (les avances ne sont pas reportées)
 
             data[member.id].months[monthKey] = {
               charge,
@@ -4871,7 +4871,7 @@
                           const monthData = data.months[month.key];
                           totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
-                          totalRemainingAll += monthData.charge - monthData.totalPaid;
+                          totalRemainingAll = monthData.remaining; // solde courant (dernier mois, report inclus)
 
                           return (
                             <React.Fragment key={month.key}>
@@ -4936,7 +4936,7 @@
                           const monthData = data.months[month.key];
                           totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
-                          totalRemainingAll += monthData.charge - monthData.totalPaid;
+                          totalRemainingAll = monthData.remaining; // solde courant (dernier mois, report inclus)
 
                           return (
                             <tr key={month.key}>
