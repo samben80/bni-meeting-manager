@@ -1732,6 +1732,11 @@
           if (!initial[m.id]) {
             initial[m.id] = { status: 'absent', amount: 0, inactiveSingle: false };
           }
+          const e = initial[m.id];
+          e.activity = e.inactiveSingle ? 'inactive_single'
+            : (m.inactiveUntil && meeting.date <= m.inactiveUntil) ? 'inactive_until'
+            : (m.inactiveFrom && meeting.date >= m.inactiveFrom) ? 'inactive_from'
+            : 'active';
         });
         setLocalPresences(initial);
       }, [presences, members]);
@@ -1769,42 +1774,24 @@
 
       const getActivityValue = (member) => {
         const lp = localPresences[member.id] || {};
+        if (lp.activity) return lp.activity;
         if (lp.inactiveSingle) return 'inactive_single';
         if (member.inactiveUntil && meeting.date <= member.inactiveUntil) return 'inactive_until';
         if (member.inactiveFrom && meeting.date >= member.inactiveFrom) return 'inactive_from';
         return 'active';
       };
 
-      const handleActivityChange = async (memberId, value) => {
-        const member = members.find(m => m.id === memberId);
-        if (!member) return;
-        if (value === 'inactive_single') {
-          handlePresenceChange(memberId, 'inactiveSingle', true);
-          return;
-        }
-        handlePresenceChange(memberId, 'inactiveSingle', false);
-        try {
-          if (value === 'inactive_until') {
-            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
-              inactiveUntil: meeting.date,
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-          } else if (value === 'inactive_from') {
-            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
-              inactiveFrom: meeting.date,
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
-          } else {
-            await db.collection(COLLECTION_NAMES.members).doc(memberId).update({
-              inactiveFrom: null,
-              inactiveUntil: null,
-              updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-            });
+      // Modification locale uniquement : le statut d'activité est persisté à l'enregistrement,
+      // pour ne pas réinitialiser les saisies en cours.
+      const handleActivityChange = (memberId, value) => {
+        setLocalPresences(prev => ({
+          ...prev,
+          [memberId]: {
+            ...prev[memberId],
+            activity: value,
+            inactiveSingle: value === 'inactive_single'
           }
-        } catch (error) {
-          console.error('Erreur mise à jour activité:', error);
-          alert('Erreur lors de la mise a jour du statut d activite');
-        }
+        }));
       };
 
       const handlePresenceChange = (memberId, field, value) => {
@@ -1848,14 +1835,27 @@
             const extraCost = memberExtraCosts[memberId] || 0;
             
             const memberObj = members.find(m => m.id === memberId);
-            const isInactive = isMemberInactiveForMeeting(memberObj, meeting, data);
+            const activity = data.activity || 'active';
+            const isInactive = activity !== 'active';
+            // Persister le statut d'activité (niveau membre) uniquement s'il a changé
+            const desiredUntil = activity === 'inactive_until' ? meeting.date : null;
+            const desiredFrom = activity === 'inactive_from' ? meeting.date : null;
+            const curUntil = (memberObj && memberObj.inactiveUntil) || null;
+            const curFrom = (memberObj && memberObj.inactiveFrom) || null;
+            if (memberObj && (desiredUntil !== curUntil || desiredFrom !== curFrom)) {
+              batch.update(db.collection(COLLECTION_NAMES.members).doc(memberId), {
+                inactiveUntil: desiredUntil,
+                inactiveFrom: desiredFrom,
+                updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
             const presenceData = {
               meetingId: meeting.id,
               memberId: memberId,
               status: data.status,
               amount: data.amount,
               due: isInactive ? 0 : DUE_PER_MEETING,
-              inactiveSingle: data.inactiveSingle || false,
+              inactiveSingle: activity === 'inactive_single',
               guestFees: extraCost,
               updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
               updatedBy: auth.currentUser.email
