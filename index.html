@@ -3139,6 +3139,26 @@
                     </tr>
                   ))}
                 </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid #9ca3af', fontWeight: 'bold', background: '#f3f4f6' }}>
+                    <td style={{ position: 'sticky', left: 0, background: '#f3f4f6', zIndex: 9 }}>TOTAL</td>
+                    {months.map(monthKey => {
+                      const rows = Object.values(feesByMemberAndMonth).map(md => md.months[monthKey]).filter(Boolean);
+                      const sumDue = rows.reduce((s, d) => s + (d.totalDue || 0), 0);
+                      const sumGuest = rows.reduce((s, d) => s + (d.guestFees || 0), 0);
+                      const sumPaid = rows.reduce((s, d) => s + (d.totalPaid || 0), 0);
+                      const sumRem = rows.reduce((s, d) => s + (d.remaining || 0), 0);
+                      return (
+                        <React.Fragment key={monthKey}>
+                          <td style={{ borderLeft: '2px solid #e5e7eb' }}>{formatInteger(sumDue)} MAD</td>
+                          <td style={{ color: '#f59e0b' }}>{sumGuest > 0 ? `+${formatInteger(sumGuest)}` : '-'}</td>
+                          <td style={{ color: '#10b981' }}>{formatInteger(sumPaid)}</td>
+                          <td style={{ color: sumRem > 0 ? '#dc2626' : sumRem < 0 ? '#10b981' : '#9ca3af' }}>{formatInteger(sumRem)}</td>
+                        </React.Fragment>
+                      );
+                    })}
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
