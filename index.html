@@ -2027,6 +2027,7 @@
       const [editingId, setEditingId] = useState(null);
       const [importing, setImporting] = useState(false);
       const [importMessage, setImportMessage] = useState({ type: '', text: '' });
+      const [selectedIds, setSelectedIds] = useState([]);
 
       const handleExcelImport = async (e) => {
         const file = e.target.files[0];
@@ -2167,6 +2168,32 @@
         }
       };
 
+      const toggleSelect = (id) => {
+        setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      };
+
+      const toggleSelectAll = () => {
+        setSelectedIds(prev => prev.length === members.length ? [] : members.map(m => m.id));
+      };
+
+      const handleBulkDelete = async () => {
+        if (selectedIds.length === 0) return;
+        if (!confirm('Supprimer ' + selectedIds.length + ' membre(s) sélectionné(s) ? Cette action est irréversible.')) return;
+        try {
+          const batch = db.batch();
+          selectedIds.forEach(id => {
+            batch.delete(db.collection(COLLECTION_NAMES.members).doc(id));
+          });
+          await batch.commit();
+          await logActivity('Suppression en masse membres', selectedIds.length + ' membre(s) supprimé(s)', 'bulk', 'members');
+          setSelectedIds([]);
+          alert(selectedIds.length + ' membre(s) supprimé(s)');
+        } catch (error) {
+          console.error('Erreur suppression en masse:', error);
+          alert('Erreur lors de la suppression en masse');
+        }
+      };
+
       const getMemberStats = (memberId) => {
         if (!presences || presences.length === 0) {
           return { totalDue: 0, totalPaid: 0, remaining: 0 };
@@ -2271,10 +2298,27 @@
 
           <div className="card">
             <div className="card-title">📋 Liste des membres</div>
+            {selectedIds.length > 0 && (
+              <div className="alert alert-warning" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px', marginBottom: '15px' }}>
+                <span><strong>{selectedIds.length}</strong> membre(s) sélectionné(s)</span>
+                <div className="btn-group">
+                  <button className="btn btn-secondary" onClick={() => setSelectedIds([])}>Annuler la sélection</button>
+                  <button className="btn btn-danger" onClick={handleBulkDelete}>🗑️ Supprimer la sélection</button>
+                </div>
+              </div>
+            )}
             <div className="table-container">
               <table>
                 <thead>
                   <tr>
+                    <th style={{ width: '40px', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={members.length > 0 && selectedIds.length === members.length}
+                        onChange={toggleSelectAll}
+                        title="Tout sélectionner"
+                      />
+                    </th>
                     <th>Nom</th>
                     <th>Téléphone</th>
                     <th>Email</th>
@@ -2286,15 +2330,23 @@
                 <tbody>
                   {members.length === 0 ? (
                     <tr>
-                      <td colSpan="6" style={{ textAlign: 'center', padding: '20px' }}>
+                      <td colSpan="7" style={{ textAlign: 'center', padding: '20px' }}>
                         Aucun membre enregistré
                       </td>
                     </tr>
                   ) : (
                     members.map(member => {
                       const stats = getMemberStats(member.id);
+                      const isSelected = selectedIds.includes(member.id);
                       return (
-                        <tr key={member.id}>
+                        <tr key={member.id} style={isSelected ? { background: '#fef2f2' } : null}>
+                          <td style={{ textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleSelect(member.id)}
+                            />
+                          </td>
                           <td><strong>{member.name}</strong></td>
                           <td>{member.phone}</td>
                           <td>{member.email}</td>
