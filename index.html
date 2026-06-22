@@ -3124,11 +3124,16 @@
                                 return (
                                   <button
                                     className={'btn ' + (hasFollowup ? 'btn-success' : 'btn-secondary')}
-                                    disabled={!isClosed}
                                     title={isClosed
                                       ? (hasFollowup ? 'Modifier le suivi de l\'invité' : 'Renseigner le suivi de l\'invité')
                                       : 'Suivi disponible après clôture de la réunion'}
-                                    onClick={() => openFollowup(guest)}
+                                    onClick={() => {
+                                      if (!isClosed) {
+                                        alert('Veuillez d\'abord clôturer la réunion avant de renseigner le suivi de l\'invité.');
+                                        return;
+                                      }
+                                      openFollowup(guest);
+                                    }}
                                   >
                                     {hasFollowup ? '📋✓' : '📋'}
                                   </button>
