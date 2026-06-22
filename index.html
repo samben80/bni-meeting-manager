@@ -1477,7 +1477,7 @@
               <MembersView members={members} presences={presences} meetings={meetings} />
             )}
             {currentView === 'guests' && (userRole?.canEditGuests || userRole?.isAdmin) && (
-              <GuestsView guests={guests} meetings={meetings} members={members} />
+              <GuestsView guests={guests} meetings={meetings} members={members} guestPresences={guestPresences} />
             )}
             {currentView === 'fees' && (userRole?.canEditFees || userRole?.isAdmin) && (
               <FeesView members={members} presences={presences} meetings={meetings} guests={guests} guestPresences={guestPresences} />
@@ -2542,7 +2542,7 @@
     }
 
     // ===== VUE INVITÉS =====
-    function GuestsView({ guests, meetings, members }) {
+    function GuestsView({ guests, meetings, members, guestPresences }) {
       const [guestName, setGuestName] = useState('');
       const [guestEmail, setGuestEmail] = useState('');
       const [guestPhone, setGuestPhone] = useState('');
@@ -2559,6 +2559,12 @@
       const [selectedMeetingForImport, setSelectedMeetingForImport] = useState('');
       const [filterDate, setFilterDate] = useState(''); // NOUVEAU - Filtre par date
       const [selectedGuests, setSelectedGuests] = useState([]); // sélection pour suppression en masse
+      // Suivi de l'invité (relance après réunion clôturée)
+      const [followupGuest, setFollowupGuest] = useState(null);
+      const [fuWantsToJoin, setFuWantsToJoin] = useState('oui');
+      const [fuApplicationDone, setFuApplicationDone] = useState('non');
+      const [fuPlannedWhen, setFuPlannedWhen] = useState('');
+      const [fuWantsAssistance, setFuWantsAssistance] = useState('non');
 
       const handleExcelImport = async (e) => {
         const file = e.target.files[0];
@@ -2739,6 +2745,46 @@
       const toggleGuest = (id) => setSelectedGuests(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
       const toggleAll = () => setSelectedGuests(allSelected ? [] : filteredGuests.map(g => g.id));
 
+      // L'invité a-t-il été marqué présent dans sa réunion ?
+      const isGuestPresent = (guest) => guestPresences.some(p =>
+        p.guestId === guest.id && p.meetingId === guest.meetingId && p.status === 'present'
+      );
+
+      const openFollowup = (guest) => {
+        const f = guest.followup || {};
+        setFuWantsToJoin(f.wantsToJoin || 'oui');
+        setFuApplicationDone(f.applicationDone || 'non');
+        setFuPlannedWhen(f.plannedWhen || '');
+        setFuWantsAssistance(f.wantsAssistance || 'non');
+        setFollowupGuest(guest);
+      };
+
+      const handleSaveFollowup = async () => {
+        if (!followupGuest) return;
+        try {
+          const followup = {
+            wantsToJoin: fuWantsToJoin,
+            applicationDone: fuWantsToJoin === 'oui' ? fuApplicationDone : '',
+            plannedWhen: fuWantsToJoin === 'non' ? fuPlannedWhen.trim() : '',
+            wantsAssistance: fuWantsAssistance,
+            contactedAt: new Date().toISOString(),
+            contactedBy: auth.currentUser.email
+          };
+          await db.collection(COLLECTION_NAMES.guests).doc(followupGuest.id).update({ followup });
+          setFollowupGuest(null);
+          alert('Suivi enregistré');
+        } catch (error) {
+          console.error('Erreur enregistrement suivi:', error);
+          alert('Erreur lors de l\'enregistrement du suivi');
+        }
+      };
+
+      // Invités contactés (avec suivi renseigné) pour le rapport des relances
+      const followupReports = guests
+        .filter(g => g.followup)
+        .map(g => ({ guest: g, meeting: meetings.find(m => m.id === g.meetingId) }))
+        .sort((a, b) => (b.guest.followup.contactedAt || '').localeCompare(a.guest.followup.contactedAt || ''));
+
       const handleBulkDelete = async () => {
         if (selectedGuests.length === 0) return;
         if (!confirm('Supprimer les ' + selectedGuests.length + ' invité(s) sélectionné(s) ? Cette action est irréversible.')) return;
@@ -2760,7 +2806,7 @@
 
       return (
         <div>
-          <div className="card">
+          <div className="card no-print">
             <div className="card-title">👋 Ajouter un invité</div>
             
             {importMessage.text && (
@@ -2949,7 +2995,7 @@
             </div>
           </div>
 
-          <div className="card">
+          <div className="card no-print">
             <div className="card-title">📋 Liste des invités</div>
             
             <div className="form-row" style={{ marginBottom: '20px' }}>
@@ -3065,12 +3111,30 @@
                             <span className="badge badge-info">{guest.inviteType || 'Visiteur'}</span>
                           </td>
                           <td>
-                            <button 
-                              className="btn btn-danger"
-                              onClick={() => handleDelete(guest.id)}
-                            >
-                              🗑️
-                            </button>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              <button
+                                className="btn btn-danger"
+                                onClick={() => handleDelete(guest.id)}
+                              >
+                                🗑️
+                              </button>
+                              {isGuestPresent(guest) && (() => {
+                                const isClosed = meeting && meeting.status === 'closed';
+                                const hasFollowup = !!guest.followup;
+                                return (
+                                  <button
+                                    className={'btn ' + (hasFollowup ? 'btn-success' : 'btn-secondary')}
+                                    disabled={!isClosed}
+                                    title={isClosed
+                                      ? (hasFollowup ? 'Modifier le suivi de l\'invité' : 'Renseigner le suivi de l\'invité')
+                                      : 'Suivi disponible après clôture de la réunion'}
+                                    onClick={() => openFollowup(guest)}
+                                  >
+                                    {hasFollowup ? '📋✓' : '📋'}
+                                  </button>
+                                );
+                              })()}
+                            </div>
                           </td>
                         </tr>
                       );
@@ -3080,6 +3144,130 @@
               </table>
             </div>
           </div>
+
+          {/* RAPPORT DES RELANCES (invités contactés après clôture) */}
+          {followupReports.length > 0 && (
+            <div className="card print-section" style={{ marginTop: '20px' }}>
+              <div className="card-title no-print" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>📊 Rapport des relances ({followupReports.length})</span>
+                <button className="btn btn-secondary" onClick={() => window.print()}>
+                  🖨️ Imprimer le rapport
+                </button>
+              </div>
+
+              <div className="print-header">
+                <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
+                <h1>Rapport des relances invités</h1>
+                <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
+              </div>
+
+              <div className="table-container">
+                <table className="print-table">
+                  <thead>
+                    <tr>
+                      <th>Invité</th>
+                      <th>Réunion</th>
+                      <th>Société</th>
+                      <th>Contact</th>
+                      <th>Souhaite intégrer BNI</th>
+                      <th>Postulation faite</th>
+                      <th>Prévu pour</th>
+                      <th>Souhaite assistance</th>
+                      <th>Contacté le</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {followupReports.map(({ guest, meeting }) => {
+                      const f = guest.followup || {};
+                      const yn = (v) => v === 'oui' ? 'Oui' : v === 'non' ? 'Non' : '-';
+                      return (
+                        <tr key={guest.id}>
+                          <td><strong>{guest.name}</strong></td>
+                          <td>{meeting ? new Date(meeting.date).toLocaleDateString('fr-FR') : 'N/A'}</td>
+                          <td>{guest.company || '-'}</td>
+                          <td>
+                            {guest.email && <div style={{ fontSize: '12px' }}>{guest.email}</div>}
+                            {guest.phone && <div style={{ fontSize: '12px' }}>{guest.phone}</div>}
+                            {!guest.email && !guest.phone && '-'}
+                          </td>
+                          <td>{yn(f.wantsToJoin)}</td>
+                          <td>{f.wantsToJoin === 'oui' ? yn(f.applicationDone) : '-'}</td>
+                          <td>{f.wantsToJoin === 'non' ? (f.plannedWhen || '-') : '-'}</td>
+                          <td>{yn(f.wantsAssistance)}</td>
+                          <td>{f.contactedAt ? new Date(f.contactedAt).toLocaleDateString('fr-FR') : '-'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* MODALE : formulaire de suivi de l'invité */}
+          {followupGuest && (
+            <div className="modal-overlay" onClick={() => setFollowupGuest(null)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+                <h3 style={{ marginBottom: '20px', color: '#C8102E' }}>
+                  📋 Suivi de l'invité
+                </h3>
+
+                <div style={{ marginBottom: '20px', padding: '15px', background: '#f9fafb', borderRadius: '8px' }}>
+                  <strong>Invité :</strong> {followupGuest.name}<br />
+                  {followupGuest.company && (<><strong>Société :</strong> {followupGuest.company}<br /></>)}
+                  <strong>Réunion :</strong> {(() => { const m = meetings.find(m => m.id === followupGuest.meetingId); return m ? new Date(m.date).toLocaleDateString('fr-FR') : 'N/A'; })()}
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <label className="form-label">1. Souhaite intégrer BNI ?</label>
+                  <select className="form-select" value={fuWantsToJoin} onChange={(e) => setFuWantsToJoin(e.target.value)}>
+                    <option value="oui">Oui</option>
+                    <option value="non">Non</option>
+                  </select>
+                </div>
+
+                {fuWantsToJoin === 'oui' && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label className="form-label">2. Postulation faite ?</label>
+                    <select className="form-select" value={fuApplicationDone} onChange={(e) => setFuApplicationDone(e.target.value)}>
+                      <option value="oui">Oui</option>
+                      <option value="non">Non</option>
+                    </select>
+                  </div>
+                )}
+
+                {fuWantsToJoin === 'non' && (
+                  <div style={{ marginBottom: '16px' }}>
+                    <label className="form-label">3. C'est prévu pour quand ?</label>
+                    <input
+                      type="text"
+                      className="form-input"
+                      value={fuPlannedWhen}
+                      onChange={(e) => setFuPlannedWhen(e.target.value)}
+                      placeholder="Ex : Septembre 2026, plus tard, indéterminé…"
+                    />
+                  </div>
+                )}
+
+                <div style={{ marginBottom: '20px' }}>
+                  <label className="form-label">4. Souhaite être contacté pour assistance à postulation ?</label>
+                  <select className="form-select" value={fuWantsAssistance} onChange={(e) => setFuWantsAssistance(e.target.value)}>
+                    <option value="oui">Oui</option>
+                    <option value="non">Non</option>
+                  </select>
+                </div>
+
+                <div className="btn-group">
+                  <button className="btn btn-primary" onClick={handleSaveFollowup}>
+                    ✓ Enregistrer le suivi
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => setFollowupGuest(null)}>
+                    Annuler
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
