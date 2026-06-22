@@ -4691,25 +4691,47 @@
       const [selectedReport, setSelectedReport] = useState('mandat'); // 'mandat', 'membre', 'presences'
       const [selectedMember, setSelectedMember] = useState('');
 
+      // Intervalle d'impression configurable (par défaut : 6 derniers mois)
+      const monthKeyOf = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      const now = new Date();
+      const defaultEndMonth = monthKeyOf(now);
+      const defaultStartMonth = monthKeyOf(new Date(now.getFullYear(), now.getMonth() - 5, 1));
+      const [startMonth, setStartMonth] = useState(defaultStartMonth);
+      const [endMonth, setEndMonth] = useState(defaultEndMonth);
+
       // Fonction d'impression
       const handlePrint = () => {
         window.print();
       };
 
-      // Obtenir les 6 derniers mois
-      const getLast6Months = () => {
+      // Générer la liste des mois compris dans l'intervalle sélectionné
+      const getMonthsRange = (startKey, endKey) => {
         const months = [];
-        const now = new Date();
-        for (let i = 5; i >= 0; i--) {
-          const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-          const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-          const label = date.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+        if (!startKey || !endKey) return months;
+        const [sy, sm] = startKey.split('-').map(Number);
+        const [ey, em] = endKey.split('-').map(Number);
+        let cur = new Date(sy, sm - 1, 1);
+        const end = new Date(ey, em - 1, 1);
+        if (end < cur) return months; // intervalle invalide
+        let guard = 0;
+        while (cur <= end && guard < 600) {
+          const key = monthKeyOf(cur);
+          const label = cur.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
           months.push({ key, label });
+          cur = new Date(cur.getFullYear(), cur.getMonth() + 1, 1);
+          guard++;
         }
         return months;
       };
 
-      const last6Months = getLast6Months();
+      const monthsRange = getMonthsRange(startMonth, endMonth);
+      const rangeKeys = new Set(monthsRange.map(m => m.key));
+      const meetingInRange = (meetingId) => {
+        const meeting = meetings.find(m => m.id === meetingId);
+        if (!meeting || !meeting.date) return false;
+        const d = new Date(meeting.date);
+        return rangeKeys.has(monthKeyOf(d));
+      };
 
       // Calculer les données par membre et par mois
       const getMemberMonthlyData = () => {
@@ -4722,7 +4744,7 @@
           };
 
           let carry = 0; // reste non payé reporté du mois précédent
-          last6Months.forEach(({ key: monthKey }) => {
+          monthsRange.forEach(({ key: monthKey }) => {
             const memberPresencesThisMonth = presences.filter(p => {
               if (p.memberId !== member.id) return false;
               const meeting = meetings.find(m => m.id === p.meetingId);
@@ -4758,7 +4780,7 @@
         const stats = {};
         
         members.forEach(member => {
-          const memberPresences = presences.filter(p => p.memberId === member.id);
+          const memberPresences = presences.filter(p => p.memberId === member.id && meetingInRange(p.meetingId));
           const totalMeetings = memberPresences.length;
           const presentCount = memberPresences.filter(p => ['present', 'suppleant'].includes(p.status)).length;
           const absentCount = memberPresences.filter(p => p.status === 'absent').length;
@@ -4794,7 +4816,7 @@
                   value={selectedReport}
                   onChange={(e) => setSelectedReport(e.target.value)}
                 >
-                  <option value="mandat">Situation cotisations par mandat (6 mois)</option>
+                  <option value="mandat">Situation cotisations par mandat</option>
                   <option value="membre">Situation cotisations par membre</option>
                   <option value="presences">État des présences</option>
                 </select>
@@ -4817,11 +4839,39 @@
               )}
 
               <div className="form-group">
+                <label className="form-label">Du mois</label>
+                <input
+                  type="month"
+                  className="form-input"
+                  value={startMonth}
+                  max={endMonth}
+                  onChange={(e) => setStartMonth(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Au mois</label>
+                <input
+                  type="month"
+                  className="form-input"
+                  value={endMonth}
+                  min={startMonth}
+                  onChange={(e) => setEndMonth(e.target.value)}
+                />
+              </div>
+
+              <div className="form-group">
                 <button className="btn btn-primary" onClick={handlePrint}>
                   🖨️ Imprimer
                 </button>
               </div>
             </div>
+
+            {monthsRange.length === 0 && (
+              <p style={{ color: '#dc2626', marginTop: '8px' }}>
+                ⚠️ Intervalle invalide : le mois de début doit précéder ou égaler le mois de fin.
+              </p>
+            )}
           </div>
 
           {/* RAPPORT 1 : Situation par mandat (6 mois) */}
@@ -4830,7 +4880,7 @@
               <div className="print-header">
                 <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
                 <h1>Situation des Cotisations par Mandat</h1>
-                <p>Période : {last6Months[0].label} - {last6Months[last6Months.length - 1].label}</p>
+                <p>Période : {monthsRange.length ? `${monthsRange[0].label} - ${monthsRange[monthsRange.length - 1].label}` : "-"}</p>
                 <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
               </div>
 
@@ -4838,7 +4888,7 @@
                 <thead>
                   <tr>
                     <th style={{ width: '200px' }}>Membre</th>
-                    {last6Months.map(month => (
+                    {monthsRange.map(month => (
                       <th key={month.key} colSpan="3" style={{ textAlign: 'center', borderLeft: '2px solid #000' }}>
                         {month.label}
                       </th>
@@ -4847,7 +4897,7 @@
                   </tr>
                   <tr>
                     <th></th>
-                    {last6Months.map(month => (
+                    {monthsRange.map(month => (
                       <React.Fragment key={month.key}>
                         <th style={{ fontSize: '10px', borderLeft: '2px solid #000' }}>Dû</th>
                         <th style={{ fontSize: '10px' }}>Payé</th>
@@ -4868,7 +4918,7 @@
                     return (
                       <tr key={memberId}>
                         <td><strong>{data.name}</strong></td>
-                        {last6Months.map(month => {
+                        {monthsRange.map(month => {
                           const monthData = data.months[month.key];
                           totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
@@ -4918,7 +4968,7 @@
                       <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
                       <h1>Situation des Cotisations</h1>
                       <h2>Membre : {data.name}</h2>
-                      <p>Période : {last6Months[0].label} - {last6Months[last6Months.length - 1].label}</p>
+                      <p>Période : {monthsRange.length ? `${monthsRange[0].label} - ${monthsRange[monthsRange.length - 1].label}` : "-"}</p>
                       <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
                     </div>
 
@@ -4933,7 +4983,7 @@
                         </tr>
                       </thead>
                       <tbody>
-                        {last6Months.map(month => {
+                        {monthsRange.map(month => {
                           const monthData = data.months[month.key];
                           totalDueAll += monthData.charge;
                           totalPaidAll += monthData.totalPaid;
@@ -4992,6 +5042,7 @@
                 <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
                 <h1>État des Présences</h1>
                 <p>Tous les membres</p>
+                <p>Période : {monthsRange.length ? `${monthsRange[0].label} - ${monthsRange[monthsRange.length - 1].label}` : "-"}</p>
                 <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
               </div>
 
@@ -5021,7 +5072,7 @@
                           fontWeight: 'bold',
                           color: stats.presenceRate >= 80 ? '#10b981' : stats.presenceRate >= 60 ? '#f59e0b' : '#dc2626'
                         }}>
-                          {stats.formatNumber(presenceRate)}%
+                          {formatNumber(stats.presenceRate)}%
                         </td>
                       </tr>
                     ))}
