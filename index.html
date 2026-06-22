@@ -683,24 +683,37 @@
         background: #f9f9f9;
       }
 
-      /* Rapport mandat : impression en paysage + pagination manuelle */
+      /* Rapport mandat : impression en paysage, marge 0 pour supprimer l'URL/date du navigateur */
       @page landscape {
         size: A4 landscape;
-        margin: 12mm;
+        margin: 0;
       }
       .print-section-landscape {
         page: landscape;
+        padding: 8mm;
         page-break-inside: auto !important;
       }
+      /* En-tête compact pour laisser de la place au tableau sur la 1re page */
+      .print-section-landscape .print-header { margin-bottom: 12px; padding-bottom: 10px; }
+      .print-section-landscape .print-logo { max-width: 110px; margin-bottom: 8px; }
+      .print-section-landscape .print-header h1 { font-size: 18px; }
+      .print-section-landscape .print-header p { font-size: 11px; margin: 2px 0; }
       .print-section-landscape .member-col {
         white-space: nowrap;
         width: 1%;
       }
-      /* En-tête et pied (totaux) répétés sur chaque page imprimée, lignes insécables */
-      .print-section-landscape thead { display: table-header-group; }
-      .print-section-landscape tfoot { display: table-footer-group; }
-      .print-section-landscape tr { page-break-inside: avoid; }
       .print-section-landscape .encaissement-col { width: 90px; }
+      /* Un bloc = une page : jamais coupé, saut forcé après chaque bloc (sauf le dernier) */
+      .print-page-block { page-break-inside: avoid; }
+      .print-page-block.with-break { page-break-after: always; }
+      /* Quadrillage homogène : toutes les lignes identiques (1px) */
+      .print-section-landscape .print-table { border-collapse: collapse; }
+      .print-section-landscape .print-table th,
+      .print-section-landscape .print-table td {
+        border: 1px solid #000;
+        padding: 5px 6px;
+      }
+      .print-section-landscape .print-table tbody tr:nth-child(even) { background: #f9f9f9; }
 
       .print-summary {
         margin-top: 30px;
@@ -4908,94 +4921,123 @@
                 <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
               </div>
 
-              <table className="print-table">
-                <thead>
-                  <tr>
-                    <th className="member-col" rowSpan="2">Membre</th>
-                    {monthsRange.map(month => (
-                      <th key={month.key} colSpan="3" style={{ textAlign: 'center', borderLeft: '2px solid #000' }}>
-                        {month.label}
-                      </th>
-                    ))}
-                    <th colSpan="3" style={{ textAlign: 'center', borderLeft: '2px solid #000' }}>TOTAL</th>
-                    <th className="encaissement-col" rowSpan="2" style={{ borderLeft: '2px solid #000' }}>Encaissement du jour</th>
-                  </tr>
-                  <tr>
-                    {monthsRange.map(month => (
+              {(() => {
+                const entries = Object.entries(memberMonthlyData);
+                // 1re page plus courte (en-tête/logo), pages suivantes plus remplies
+                const FIRST_PAGE = 12;
+                const PER_PAGE = 18;
+                const chunks = [];
+                if (entries.length === 0) {
+                  chunks.push([]);
+                } else {
+                  chunks.push(entries.slice(0, FIRST_PAGE));
+                  for (let i = FIRST_PAGE; i < entries.length; i += PER_PAGE) {
+                    chunks.push(entries.slice(i, i + PER_PAGE));
+                  }
+                }
+
+                const renderHead = () => (
+                  <thead>
+                    <tr>
+                      <th className="member-col" rowSpan="2">Membre</th>
+                      {monthsRange.map(month => (
+                        <th key={month.key} colSpan="3" style={{ textAlign: 'center' }}>{month.label}</th>
+                      ))}
+                      <th colSpan="3" style={{ textAlign: 'center' }}>TOTAL</th>
+                      <th className="encaissement-col" rowSpan="2">Encaissement du jour</th>
+                    </tr>
+                    <tr>
+                      {monthsRange.map(month => (
+                        <React.Fragment key={month.key}>
+                          <th style={{ fontSize: '10px' }}>Dû</th>
+                          <th style={{ fontSize: '10px' }}>Payé</th>
+                          <th style={{ fontSize: '10px' }}>Reste</th>
+                        </React.Fragment>
+                      ))}
+                      <th style={{ fontSize: '10px' }}>Dû</th>
+                      <th style={{ fontSize: '10px' }}>Payé</th>
+                      <th style={{ fontSize: '10px' }}>Reste</th>
+                    </tr>
+                  </thead>
+                );
+
+                const renderMemberRow = ([memberId, data]) => {
+                  let tDue = 0, tPaid = 0, tRem = 0;
+                  const cells = monthsRange.map(month => {
+                    const md = data.months[month.key];
+                    tDue += md.charge;
+                    tPaid += md.totalPaid;
+                    tRem = md.remaining; // solde courant (dernier mois, report inclus)
+                    return (
                       <React.Fragment key={month.key}>
-                        <th style={{ fontSize: '10px', borderLeft: '2px solid #000' }}>Dû</th>
-                        <th style={{ fontSize: '10px' }}>Payé</th>
-                        <th style={{ fontSize: '10px' }}>Reste</th>
+                        <td>{md.totalDue > 0 ? formatInteger(md.totalDue) : '-'}</td>
+                        <td>{md.totalPaid > 0 ? formatInteger(md.totalPaid) : '-'}</td>
+                        <td>{md.totalDue > 0 ? formatInteger(md.remaining) : '-'}</td>
                       </React.Fragment>
-                    ))}
-                    <th style={{ fontSize: '10px', borderLeft: '2px solid #000' }}>Dû</th>
-                    <th style={{ fontSize: '10px' }}>Payé</th>
-                    <th style={{ fontSize: '10px' }}>Reste</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Object.entries(memberMonthlyData).map(([memberId, data]) => {
-                    let tDue = 0, tPaid = 0, tRem = 0;
-                    const cells = monthsRange.map(month => {
-                      const md = data.months[month.key];
-                      tDue += md.charge;
-                      tPaid += md.totalPaid;
-                      tRem = md.remaining; // solde courant (dernier mois, report inclus)
-                      return (
-                        <React.Fragment key={month.key}>
-                          <td style={{ borderLeft: '2px solid #000' }}>{md.totalDue > 0 ? formatInteger(md.totalDue) : '-'}</td>
-                          <td>{md.totalPaid > 0 ? formatInteger(md.totalPaid) : '-'}</td>
-                          <td>{md.totalDue > 0 ? formatInteger(md.remaining) : '-'}</td>
-                        </React.Fragment>
-                      );
-                    });
-                    return (
-                      <tr key={memberId}>
-                        <td className="member-col"><strong>{data.name}</strong></td>
-                        {cells}
-                        <td style={{ borderLeft: '2px solid #000', fontWeight: 'bold' }}>{formatInteger(tDue)}</td>
-                        <td style={{ fontWeight: 'bold' }}>{formatInteger(tPaid)}</td>
-                        <td style={{ fontWeight: 'bold' }}>{formatInteger(tRem)}</td>
-                        <td className="encaissement-col" style={{ borderLeft: '2px solid #000' }}></td>
-                      </tr>
                     );
-                  })}
-                </tbody>
-                <tfoot>
-                  {(() => {
-                    const entries = Object.entries(memberMonthlyData);
-                    const monthCells = monthsRange.map(month => {
-                      const md = entries.map(([, d]) => d.months[month.key]).filter(Boolean);
-                      const sumDue = md.reduce((s, x) => s + (x.totalDue || 0), 0);
-                      const sumPaid = md.reduce((s, x) => s + (x.totalPaid || 0), 0);
-                      const sumReste = md.reduce((s, x) => s + Math.max(0, x.remaining || 0), 0); // les avances ne diminuent pas le reste
-                      return (
-                        <React.Fragment key={month.key}>
-                          <td style={{ borderLeft: '2px solid #000' }}>{sumDue > 0 ? formatInteger(sumDue) : '-'}</td>
-                          <td>{sumPaid > 0 ? formatInteger(sumPaid) : '-'}</td>
-                          <td>{sumReste > 0 ? formatInteger(sumReste) : '-'}</td>
-                        </React.Fragment>
-                      );
-                    });
-                    const gDue = entries.reduce((s, [, d]) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].charge) || 0), 0), 0);
-                    const gPaid = entries.reduce((s, [, d]) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].totalPaid) || 0), 0), 0);
-                    const gReste = entries.reduce((s, [, d]) => {
-                      const last = monthsRange.length ? d.months[monthsRange[monthsRange.length - 1].key] : null;
-                      return s + Math.max(0, (last && last.remaining) || 0);
-                    }, 0);
+                  });
+                  return (
+                    <tr key={memberId}>
+                      <td className="member-col"><strong>{data.name}</strong></td>
+                      {cells}
+                      <td style={{ fontWeight: 'bold' }}>{formatInteger(tDue)}</td>
+                      <td style={{ fontWeight: 'bold' }}>{formatInteger(tPaid)}</td>
+                      <td style={{ fontWeight: 'bold' }}>{formatInteger(tRem)}</td>
+                      <td className="encaissement-col"></td>
+                    </tr>
+                  );
+                };
+
+                const renderTotalRow = (rows, label, grand) => {
+                  const monthCells = monthsRange.map(month => {
+                    const md = rows.map(([, d]) => d.months[month.key]).filter(Boolean);
+                    const sumDue = md.reduce((s, x) => s + (x.totalDue || 0), 0);
+                    const sumPaid = md.reduce((s, x) => s + (x.totalPaid || 0), 0);
+                    const sumReste = md.reduce((s, x) => s + Math.max(0, x.remaining || 0), 0); // les avances ne diminuent pas le reste
                     return (
-                      <tr style={{ borderTop: '2px solid #000', fontWeight: 'bold', background: '#e5e7eb' }}>
-                        <td className="member-col"><strong>TOTAL</strong></td>
-                        {monthCells}
-                        <td style={{ borderLeft: '2px solid #000' }}>{formatInteger(gDue)}</td>
-                        <td>{formatInteger(gPaid)}</td>
-                        <td>{formatInteger(gReste)}</td>
-                        <td className="encaissement-col" style={{ borderLeft: '2px solid #000' }}></td>
-                      </tr>
+                      <React.Fragment key={month.key}>
+                        <td>{sumDue > 0 ? formatInteger(sumDue) : '-'}</td>
+                        <td>{sumPaid > 0 ? formatInteger(sumPaid) : '-'}</td>
+                        <td>{sumReste > 0 ? formatInteger(sumReste) : '-'}</td>
+                      </React.Fragment>
                     );
-                  })()}
-                </tfoot>
-              </table>
+                  });
+                  const gDue = rows.reduce((s, [, d]) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].charge) || 0), 0), 0);
+                  const gPaid = rows.reduce((s, [, d]) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].totalPaid) || 0), 0), 0);
+                  const gReste = rows.reduce((s, [, d]) => {
+                    const last = monthsRange.length ? d.months[monthsRange[monthsRange.length - 1].key] : null;
+                    return s + Math.max(0, (last && last.remaining) || 0);
+                  }, 0);
+                  return (
+                    <tr key={label} style={{ fontWeight: 'bold', background: grand ? '#d1d5db' : '#eef2ff' }}>
+                      <td className="member-col"><strong>{label}</strong></td>
+                      {monthCells}
+                      <td>{formatInteger(gDue)}</td>
+                      <td>{formatInteger(gPaid)}</td>
+                      <td>{formatInteger(gReste)}</td>
+                      <td className="encaissement-col"></td>
+                    </tr>
+                  );
+                };
+
+                return chunks.map((chunk, ci) => {
+                  const isLast = ci === chunks.length - 1;
+                  const multi = chunks.length > 1;
+                  const subLabel = multi ? `Sous-total page ${ci + 1}` : 'TOTAL';
+                  return (
+                    <div key={ci} className={'print-page-block' + (isLast ? '' : ' with-break')}>
+                      <table className="print-table">
+                        {renderHead()}
+                        <tbody>
+                          {chunk.map(renderMemberRow)}
+                          {renderTotalRow(chunk, subLabel, false)}
+                          {isLast && multi ? renderTotalRow(entries, 'TOTAL GÉNÉRAL', true) : null}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                });
+              })()}
 
               <div className="print-footer">
                 <p>Montants en MAD | Généré le {new Date().toLocaleString('fr-FR')}</p>
