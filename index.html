@@ -1176,6 +1176,7 @@
                     canViewReports: true,
                     canManageApplications: true,
                     canCloseApplications: false,
+                    canReopenMeetings: true,
                     createdAt: firebase.firestore.FieldValue.serverTimestamp()
                   };
                   await db.collection(COLLECTION_NAMES.userRoles).doc(user.uid).set(adminRole);
@@ -1194,6 +1195,7 @@
                     canViewReports: true,
                     canManageApplications: false,
                     canCloseApplications: false,
+                    canReopenMeetings: false,
                     createdAt: firebase.firestore.FieldValue.serverTimestamp()
                   };
                   setUserRole(defaultRole);
@@ -1465,12 +1467,13 @@
               />
             )}
             {currentView === 'meetings' && (userRole?.canEditMeetings || userRole?.isAdmin) && (
-              <MeetingsView 
+              <MeetingsView
                 meetings={meetings}
                 members={members}
                 presences={presences}
                 guests={guests}
                 guestPresences={guestPresences}
+                userRole={userRole}
               />
             )}
             {currentView === 'members' && (userRole?.canEditMembers || userRole?.isAdmin) && (
@@ -1592,7 +1595,7 @@
     }
 
     // ===== VUE RÉUNIONS =====
-    function MeetingsView({ meetings, members, presences, guests, guestPresences }) {
+    function MeetingsView({ meetings, members, presences, guests, guestPresences, userRole }) {
       const [meetingDate, setMeetingDate] = useState('');
       const [meetingComment, setMeetingComment] = useState('');
       const [selectedMeeting, setSelectedMeeting] = useState(null);
@@ -1744,12 +1747,13 @@
           </div>
 
           {showPresenceForm && selectedMeeting && (
-            <PresenceForm 
+            <PresenceForm
               meeting={selectedMeeting}
               members={members}
               presences={presences.filter(p => p.meetingId === selectedMeeting.id)}
               guests={guests}
               guestPresences={guestPresences.filter(p => p.meetingId === selectedMeeting.id)}
+              userRole={userRole}
               onClose={() => {
                 setShowPresenceForm(false);
                 setSelectedMeeting(null);
@@ -1761,7 +1765,7 @@
     }
 
     // ===== FORMULAIRE PRÉSENCES =====
-    function PresenceForm({ meeting, members, presences, guests, guestPresences, onClose }) {
+    function PresenceForm({ meeting, members, presences, guests, guestPresences, userRole, onClose }) {
       const [localPresences, setLocalPresences] = useState({});
       const [localGuestPresences, setLocalGuestPresences] = useState({});
 
@@ -2184,11 +2188,13 @@
               <div className="alert alert-info">
                 Cette réunion est clôturée et ne peut plus être modifiée.
               </div>
-              <div className="btn-group">
-                <button className="btn btn-secondary" onClick={handleReopenMeeting}>
-                  🔓 Rouvrir la réunion
-                </button>
-              </div>
+              {(userRole?.isAdmin || userRole?.canReopenMeetings) && (
+                <div className="btn-group">
+                  <button className="btn btn-secondary" onClick={handleReopenMeeting}>
+                    🔓 Rouvrir la réunion
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -5713,6 +5719,7 @@
       const [canViewReports, setCanViewReports] = useState(true);
       const [canManageApplications, setCanManageApplications] = useState(false);
       const [canCloseApplications, setCanCloseApplications] = useState(false);
+      const [canReopenMeetings, setCanReopenMeetings] = useState(false);
       const [message, setMessage] = useState({ type: '', text: '' });
       const [loading, setLoading] = useState(false);
       const [editingUserId, setEditingUserId] = useState(null);
@@ -5752,6 +5759,7 @@
             canViewReports: canViewReports,
             canManageApplications: canManageApplications,
             canCloseApplications: canCloseApplications,
+            canReopenMeetings: canReopenMeetings,
             createdAt: firebase.firestore.FieldValue.serverTimestamp(),
             createdBy: currentUser.email
           });
@@ -5810,6 +5818,7 @@
         setCanViewReports(role.canViewReports !== undefined ? role.canViewReports : true);
         setCanManageApplications(role.canManageApplications || false);
         setCanCloseApplications(role.canCloseApplications || false);
+        setCanReopenMeetings(role.canReopenMeetings || false);
         setPassword('');
       };
 
@@ -5828,6 +5837,7 @@
         setCanViewReports(true);
         setCanManageApplications(false);
         setCanCloseApplications(false);
+        setCanReopenMeetings(false);
       };
 
       const handleUpdateUser = async () => {
@@ -5847,6 +5857,7 @@
             canViewReports: canViewReports,
             canManageApplications: canManageApplications,
             canCloseApplications: canCloseApplications,
+            canReopenMeetings: canReopenMeetings,
             updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
             updatedBy: currentUser.email
           });
@@ -5906,6 +5917,7 @@
           setCanEditFees(true);
           setCanEditExpenses(true);
           setCanManageUsers(true);
+          setCanReopenMeetings(true);
         }
       };
 
@@ -6075,6 +6087,17 @@
                     />
                     <label htmlFor="perm-close-applications">🔒 Clôturer les postulations</label>
                   </div>
+
+                  <div className="form-checkbox">
+                    <input
+                      type="checkbox"
+                      id="perm-reopen-meetings"
+                      checked={canReopenMeetings}
+                      onChange={(e) => setCanReopenMeetings(e.target.checked)}
+                      disabled={isAdmin}
+                    />
+                    <label htmlFor="perm-reopen-meetings">🔓 Rouvrir une réunion clôturée</label>
+                  </div>
                 </div>
               </div>
 
@@ -6132,6 +6155,7 @@
                       if (role.canManageUsers) permissions.push('Utilisateurs');
                       if (role.canViewReports) permissions.push('Rapports');
                       if (role.canManageApplications) permissions.push('Postulations');
+                      if (role.canReopenMeetings) permissions.push('Réouverture réunions');
 
                       const isCurrentUser = role.uid === currentUser.uid;
 
