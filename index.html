@@ -2558,6 +2558,7 @@
       const [importMessage, setImportMessage] = useState({ type: '', text: '' });
       const [selectedMeetingForImport, setSelectedMeetingForImport] = useState('');
       const [filterDate, setFilterDate] = useState(''); // NOUVEAU - Filtre par date
+      const [selectedGuests, setSelectedGuests] = useState([]); // sélection pour suppression en masse
 
       const handleExcelImport = async (e) => {
         const file = e.target.files[0];
@@ -2724,6 +2725,36 @@
         } catch (error) {
           console.error('Erreur suppression:', error);
           alert('Erreur lors de la suppression');
+        }
+      };
+
+      // Liste filtrée partagée (en-tête, sélection globale et suppression en masse)
+      const filteredGuests = filterDate
+        ? guests.filter(g => {
+            const meeting = meetings.find(m => m.id === g.meetingId);
+            return meeting && meeting.date === filterDate;
+          })
+        : guests;
+      const allSelected = filteredGuests.length > 0 && filteredGuests.every(g => selectedGuests.includes(g.id));
+      const toggleGuest = (id) => setSelectedGuests(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      const toggleAll = () => setSelectedGuests(allSelected ? [] : filteredGuests.map(g => g.id));
+
+      const handleBulkDelete = async () => {
+        if (selectedGuests.length === 0) return;
+        if (!confirm('Supprimer les ' + selectedGuests.length + ' invité(s) sélectionné(s) ? Cette action est irréversible.')) return;
+        try {
+          // Firestore limite un batch à 500 opérations -> on découpe par lots de 450
+          const ids = [...selectedGuests];
+          for (let i = 0; i < ids.length; i += 450) {
+            const batch = db.batch();
+            ids.slice(i, i + 450).forEach(id => batch.delete(db.collection(COLLECTION_NAMES.guests).doc(id)));
+            await batch.commit();
+          }
+          setSelectedGuests([]);
+          alert(ids.length + ' invité(s) supprimé(s)');
+        } catch (error) {
+          console.error('Erreur suppression en masse:', error);
+          alert('Erreur lors de la suppression en masse');
         }
       };
 
@@ -2943,11 +2974,23 @@
               {filterDate && (
                 <div className="form-group">
                   <label className="form-label" style={{ visibility: 'hidden' }}>Actions</label>
-                  <button 
+                  <button
                     className="btn btn-secondary"
                     onClick={() => setFilterDate('')}
                   >
                     🔄 Réinitialiser
+                  </button>
+                </div>
+              )}
+
+              {selectedGuests.length > 0 && (
+                <div className="form-group">
+                  <label className="form-label" style={{ visibility: 'hidden' }}>Suppression</label>
+                  <button
+                    className="btn btn-danger"
+                    onClick={handleBulkDelete}
+                  >
+                    🗑️ Supprimer la sélection ({selectedGuests.length})
                   </button>
                 </div>
               )}
@@ -2963,6 +3006,14 @@
               <table>
                 <thead>
                   <tr>
+                    <th style={{ width: '36px', textAlign: 'center' }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={toggleAll}
+                        title="Tout sélectionner"
+                      />
+                    </th>
                     <th>Réunion</th>
                     <th>Invité</th>
                     <th>Société</th>
@@ -2975,30 +3026,30 @@
                 </thead>
                 <tbody>
                   {(() => {
-                    // Filtrer les invités par date
-                    const filteredGuests = filterDate 
-                      ? guests.filter(g => {
-                          const meeting = meetings.find(m => m.id === g.meetingId);
-                          return meeting && meeting.date === filterDate;
-                        })
-                      : guests;
-                    
                     if (filteredGuests.length === 0) {
                       return (
                         <tr>
-                          <td colSpan="8" style={{ textAlign: 'center', padding: '20px' }}>
+                          <td colSpan="9" style={{ textAlign: 'center', padding: '20px' }}>
                             {filterDate ? 'Aucun invité pour cette date' : 'Aucun invité enregistré'}
                           </td>
                         </tr>
                       );
                     }
-                    
+
                     return filteredGuests.map(guest => {
                       const meeting = meetings.find(m => m.id === guest.meetingId);
                       const inviter = guest.invitedBy ? members.find(m => m.id === guest.invitedBy) : null;
-                      
+                      const isSelected = selectedGuests.includes(guest.id);
+
                       return (
-                        <tr key={guest.id}>
+                        <tr key={guest.id} style={isSelected ? { background: '#fee2e2' } : null}>
+                          <td style={{ textAlign: 'center' }}>
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => toggleGuest(guest.id)}
+                            />
+                          </td>
                           <td>{meeting ? new Date(meeting.date).toLocaleDateString('fr-FR') : 'N/A'}</td>
                           <td><strong>{guest.name}</strong></td>
                           <td>{guest.company || '-'}</td>
