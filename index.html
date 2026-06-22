@@ -4943,6 +4943,40 @@
                     );
                   })}
                 </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid #000', fontWeight: 'bold', background: '#f3f4f6' }}>
+                    <td><strong>TOTAL</strong></td>
+                    {monthsRange.map(month => {
+                      const rows = Object.values(memberMonthlyData).map(d => d.months[month.key]).filter(Boolean);
+                      const sumDue = rows.reduce((s, md) => s + (md.totalDue || 0), 0);
+                      const sumPaid = rows.reduce((s, md) => s + (md.totalPaid || 0), 0);
+                      const sumReste = rows.reduce((s, md) => s + Math.max(0, md.remaining || 0), 0); // les avances ne diminuent pas le reste
+                      return (
+                        <React.Fragment key={month.key}>
+                          <td style={{ borderLeft: '2px solid #000' }}>{sumDue > 0 ? formatInteger(sumDue) : '-'}</td>
+                          <td>{sumPaid > 0 ? formatInteger(sumPaid) : '-'}</td>
+                          <td>{sumReste > 0 ? formatInteger(sumReste) : '-'}</td>
+                        </React.Fragment>
+                      );
+                    })}
+                    {(() => {
+                      const all = Object.values(memberMonthlyData);
+                      const gDue = all.reduce((s, d) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].charge) || 0), 0), 0);
+                      const gPaid = all.reduce((s, d) => s + monthsRange.reduce((a, m) => a + ((d.months[m.key] && d.months[m.key].totalPaid) || 0), 0), 0);
+                      const gReste = all.reduce((s, d) => {
+                        const last = monthsRange.length ? d.months[monthsRange[monthsRange.length - 1].key] : null;
+                        return s + Math.max(0, (last && last.remaining) || 0);
+                      }, 0);
+                      return (
+                        <React.Fragment>
+                          <td style={{ borderLeft: '2px solid #000' }}>{formatInteger(gDue)}</td>
+                          <td>{formatInteger(gPaid)}</td>
+                          <td>{formatInteger(gReste)}</td>
+                        </React.Fragment>
+                      );
+                    })()}
+                  </tr>
+                </tfoot>
               </table>
 
               <div className="print-footer">
