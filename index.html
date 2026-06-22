@@ -1990,6 +1990,23 @@
         }
       };
 
+      const handleReopenMeeting = async () => {
+        if (!confirm('Rouvrir cette réunion ? Elle pourra de nouveau être modifiée.')) return;
+
+        try {
+          await db.collection(COLLECTION_NAMES.meetings).doc(meeting.id).update({
+            status: 'open',
+            reopenedAt: firebase.firestore.FieldValue.serverTimestamp(),
+            reopenedBy: auth.currentUser.email
+          });
+          alert('Réunion rouverte');
+          onClose();
+        } catch (error) {
+          console.error('Erreur réouverture:', error);
+          alert('Erreur lors de la réouverture');
+        }
+      };
+
       const meetingGuests = guests.filter(g => g.meetingId === meeting.id);
 
       return (
@@ -2163,8 +2180,15 @@
           )}
 
           {meeting.status === 'closed' && (
-            <div className="alert alert-info">
-              Cette réunion est clôturée et ne peut plus être modifiée.
+            <div>
+              <div className="alert alert-info">
+                Cette réunion est clôturée et ne peut plus être modifiée.
+              </div>
+              <div className="btn-group">
+                <button className="btn btn-secondary" onClick={handleReopenMeeting}>
+                  🔓 Rouvrir la réunion
+                </button>
+              </div>
             </div>
           )}
         </div>
