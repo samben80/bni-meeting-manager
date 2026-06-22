@@ -690,30 +690,35 @@
       }
       .print-section-landscape {
         page: landscape;
-        padding: 8mm;
         page-break-inside: auto !important;
       }
-      /* En-tête compact pour laisser de la place au tableau sur la 1re page */
-      .print-section-landscape .print-header { margin-bottom: 12px; padding-bottom: 10px; }
-      .print-section-landscape .print-logo { max-width: 110px; margin-bottom: 8px; }
-      .print-section-landscape .print-header h1 { font-size: 18px; }
-      .print-section-landscape .print-header p { font-size: 11px; margin: 2px 0; }
+      /* Chaque bloc = une page physique. padding 5mm = marge sur les 4 côtés
+         (l'@page est à margin:0 pour supprimer l'URL/date du navigateur). */
+      .print-page-block {
+        box-sizing: border-box;
+        padding: 5mm;
+        page-break-inside: avoid;
+      }
+      .print-page-block.with-break { page-break-after: always; }
+      /* En-tête répété sur chaque page (logo, titre, période, date) — compact */
+      .print-section-landscape .print-header { margin-bottom: 8px; padding-bottom: 6px; border-bottom: 2px solid #000; text-align: center; }
+      .print-section-landscape .print-logo { max-width: 80px; margin: 0 auto 4px; display: block; }
+      .print-section-landscape .print-header h1 { font-size: 16px; margin: 0 0 4px; }
+      .print-section-landscape .print-header p { font-size: 10px; margin: 1px 0; color: #444; }
       .print-section-landscape .member-col {
         white-space: nowrap;
         width: 1%;
       }
       .print-section-landscape .encaissement-col { width: 90px; }
-      /* Tableau continu : le navigateur remplit chaque page, l'en-tête de colonnes se répète */
-      .print-section-landscape .print-table { page-break-inside: auto; }
-      .print-section-landscape .print-table thead { display: table-header-group; }
-      .print-section-landscape .print-table tr { page-break-inside: avoid; } /* une ligne ne se coupe jamais */
-      .print-section-landscape .print-footer { margin-top: 12px; padding-top: 8px; border-top: 1px solid #000; }
-      /* Quadrillage homogène : toutes les lignes identiques (1px) */
-      .print-section-landscape .print-table { border-collapse: collapse; }
+      /* Pied de page par bloc : pagination page / nb pages */
+      .print-page-footer { margin-top: 8px; text-align: right; font-size: 10px; color: #444; }
+      /* Quadrillage homogène : toutes les lignes identiques (1px), compactes */
+      .print-section-landscape .print-table { width: 100%; border-collapse: collapse; margin: 0; }
       .print-section-landscape .print-table th,
       .print-section-landscape .print-table td {
         border: 1px solid #000;
-        padding: 5px 6px;
+        padding: 3px 5px;
+        font-size: 10px;
       }
       .print-section-landscape .print-table tbody tr:nth-child(even) { background: #f9f9f9; }
 
@@ -4916,15 +4921,19 @@
           {/* RAPPORT 1 : Situation par mandat (paysage, totaux par page) */}
           {selectedReport === 'mandat' && (
             <div className="print-section print-section-landscape">
-              <div className="print-header">
-                <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
-                <h1>Situation des Cotisations par Mandat</h1>
-                <p>Période : {monthsRange.length ? `${monthsRange[0].label} - ${monthsRange[monthsRange.length - 1].label}` : "-"}</p>
-                <p>Date d'impression : {new Date().toLocaleDateString('fr-FR')}</p>
-              </div>
-
               {(() => {
                 const entries = Object.entries(memberMonthlyData);
+                const PER_PAGE = 22; // lignes membres par page (ajustable si débordement/blanc)
+                const chunks = [];
+                if (!entries.length) {
+                  chunks.push([]);
+                } else {
+                  for (let i = 0; i < entries.length; i += PER_PAGE) {
+                    chunks.push(entries.slice(i, i + PER_PAGE));
+                  }
+                }
+                const periodLabel = monthsRange.length ? `${monthsRange[0].label} - ${monthsRange[monthsRange.length - 1].label}` : "-";
+                const printDate = new Date().toLocaleDateString('fr-FR');
 
                 const renderHead = () => (
                   <thead>
@@ -5010,22 +5019,32 @@
                   );
                 };
 
-                // Tableau unique et continu : le navigateur répartit les lignes pour
-                // remplir chaque page (en-tête de colonnes répété), TOTAL GÉNÉRAL en fin.
-                return (
-                  <table className="print-table">
-                    {renderHead()}
-                    <tbody>
-                      {entries.map(renderMemberRow)}
-                      {entries.length ? renderTotalRow(entries, 'TOTAL GÉNÉRAL', true) : null}
-                    </tbody>
-                  </table>
-                );
+                // Une page = un bloc : en-tête complet répété, lignes membres,
+                // TOTAL GÉNÉRAL sur la dernière page, pagination en pied de bloc.
+                return chunks.map((chunk, ci) => {
+                  const isLast = ci === chunks.length - 1;
+                  return (
+                    <div key={ci} className={'print-page-block' + (isLast ? '' : ' with-break')}>
+                      <div className="print-header">
+                        <img src={BNI_LOGO} alt="BNI Bouskoura" className="print-logo" />
+                        <h1>Situation des Cotisations par Mandat</h1>
+                        <p>Période : {periodLabel}</p>
+                        <p>Date d'impression : {printDate}</p>
+                      </div>
+                      <table className="print-table">
+                        {renderHead()}
+                        <tbody>
+                          {chunk.map(renderMemberRow)}
+                          {isLast && entries.length ? renderTotalRow(entries, 'TOTAL GÉNÉRAL', true) : null}
+                        </tbody>
+                      </table>
+                      <div className="print-page-footer">
+                        Montants en MAD&nbsp;&nbsp;|&nbsp;&nbsp;Page {ci + 1} / {chunks.length}
+                      </div>
+                    </div>
+                  );
+                });
               })()}
-
-              <div className="print-footer">
-                <p>Montants en MAD | Généré le {new Date().toLocaleString('fr-FR')}</p>
-              </div>
             </div>
           )}
 
