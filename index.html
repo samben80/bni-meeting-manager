@@ -703,9 +703,11 @@
         width: 1%;
       }
       .print-section-landscape .encaissement-col { width: 90px; }
-      /* Un bloc = une page : jamais coupé, saut forcé après chaque bloc (sauf le dernier) */
-      .print-page-block { page-break-inside: avoid; }
-      .print-page-block.with-break { page-break-after: always; }
+      /* Tableau continu : le navigateur remplit chaque page, l'en-tête de colonnes se répète */
+      .print-section-landscape .print-table { page-break-inside: auto; }
+      .print-section-landscape .print-table thead { display: table-header-group; }
+      .print-section-landscape .print-table tr { page-break-inside: avoid; } /* une ligne ne se coupe jamais */
+      .print-section-landscape .print-footer { margin-top: 12px; padding-top: 8px; border-top: 1px solid #000; }
       /* Quadrillage homogène : toutes les lignes identiques (1px) */
       .print-section-landscape .print-table { border-collapse: collapse; }
       .print-section-landscape .print-table th,
@@ -4923,18 +4925,6 @@
 
               {(() => {
                 const entries = Object.entries(memberMonthlyData);
-                // 1re page plus courte (en-tête/logo), pages suivantes plus remplies
-                const FIRST_PAGE = 12;
-                const PER_PAGE = 18;
-                const chunks = [];
-                if (entries.length === 0) {
-                  chunks.push([]);
-                } else {
-                  chunks.push(entries.slice(0, FIRST_PAGE));
-                  for (let i = FIRST_PAGE; i < entries.length; i += PER_PAGE) {
-                    chunks.push(entries.slice(i, i + PER_PAGE));
-                  }
-                }
 
                 const renderHead = () => (
                   <thead>
@@ -5020,23 +5010,17 @@
                   );
                 };
 
-                return chunks.map((chunk, ci) => {
-                  const isLast = ci === chunks.length - 1;
-                  const multi = chunks.length > 1;
-                  const subLabel = multi ? `Sous-total page ${ci + 1}` : 'TOTAL';
-                  return (
-                    <div key={ci} className={'print-page-block' + (isLast ? '' : ' with-break')}>
-                      <table className="print-table">
-                        {renderHead()}
-                        <tbody>
-                          {chunk.map(renderMemberRow)}
-                          {renderTotalRow(chunk, subLabel, false)}
-                          {isLast && multi ? renderTotalRow(entries, 'TOTAL GÉNÉRAL', true) : null}
-                        </tbody>
-                      </table>
-                    </div>
-                  );
-                });
+                // Tableau unique et continu : le navigateur répartit les lignes pour
+                // remplir chaque page (en-tête de colonnes répété), TOTAL GÉNÉRAL en fin.
+                return (
+                  <table className="print-table">
+                    {renderHead()}
+                    <tbody>
+                      {entries.map(renderMemberRow)}
+                      {entries.length ? renderTotalRow(entries, 'TOTAL GÉNÉRAL', true) : null}
+                    </tbody>
+                  </table>
+                );
               })()}
 
               <div className="print-footer">
