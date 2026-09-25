@@ -1437,8 +1437,16 @@
                 📜 Historique
               </button>
             )}
+            {userRole?.isAdmin && (
+              <button
+                className={`nav-tab ${currentView === 'backup' ? 'active' : ''}`}
+                onClick={() => setCurrentView('backup')}
+              >
+                💾 Sauvegarde
+              </button>
+            )}
             {userRole?.canViewReports && (
-              <button 
+              <button
                 className={`nav-tab ${currentView === 'reports' ? 'active' : ''}`}
                 onClick={() => setCurrentView('reports')}
               >
@@ -1498,6 +1506,9 @@
             {currentView === 'history' && userRole?.isAdmin && (
               <HistoryView activityLogs={activityLogs} userRoles={userRoles} />
             )}
+            {currentView === 'backup' && userRole?.isAdmin && (
+              <BackupView />
+            )}
             {currentView === 'reports' && userRole?.canViewReports && (
               <ReportsView members={members} meetings={meetings} presences={presences} guests={guests} guestPresences={guestPresences} />
             )}
@@ -1512,6 +1523,211 @@
               />
             )}
           </main>
+        </div>
+      );
+    }
+
+    // ===== SAUVEGARDE / RESTAURATION =====
+    // Les Timestamp Firestore sont sérialisés en { __type: 'timestamp', seconds, nanoseconds }
+    // pour être restaurés à l'identique.
+    const serializeFirestoreValue = (v) => {
+      if (v instanceof firebase.firestore.Timestamp) {
+        return { __type: 'timestamp', seconds: v.seconds, nanoseconds: v.nanoseconds };
+      }
+      if (Array.isArray(v)) return v.map(serializeFirestoreValue);
+      if (v && typeof v === 'object') {
+        const out = {};
+        Object.keys(v).forEach(k => { out[k] = serializeFirestoreValue(v[k]); });
+        return out;
+      }
+      return v;
+    };
+
+    const deserializeFirestoreValue = (v) => {
+      if (Array.isArray(v)) return v.map(deserializeFirestoreValue);
+      if (v && typeof v === 'object') {
+        if (v.__type === 'timestamp') return new firebase.firestore.Timestamp(v.seconds, v.nanoseconds);
+        const out = {};
+        Object.keys(v).forEach(k => { out[k] = deserializeFirestoreValue(v[k]); });
+        return out;
+      }
+      return v;
+    };
+
+    const exportAllCollections = async () => {
+      const data = {};
+      for (const name of Object.values(COLLECTION_NAMES)) {
+        const snap = await db.collection(name).get();
+        data[name] = {};
+        snap.forEach(doc => { data[name][doc.id] = serializeFirestoreValue(doc.data()); });
+      }
+      return {
+        app: 'bni-meeting-manager',
+        format: 1,
+        projectId: FIREBASE_CONFIG.projectId,
+        exportedAt: new Date().toISOString(),
+        exportedBy: auth.currentUser ? auth.currentUser.email : '',
+        collections: data
+      };
+    };
+
+    const downloadBackup = (backup, prefix) => {
+      const stamp = backup.exportedAt.replace(/[:.]/g, '-').slice(0, 19);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = (prefix || 'bni-mm-sauvegarde') + '_' + stamp + '.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    };
+
+    function BackupView() {
+      const [busy, setBusy] = useState(false);
+      const [message, setMessage] = useState({ type: '', text: '' });
+      const [loadedBackup, setLoadedBackup] = useState(null);
+      const [selectedCollections, setSelectedCollections] = useState([]);
+      const [deleteExtras, setDeleteExtras] = useState(false);
+
+      const handleExport = async () => {
+        setBusy(true);
+        setMessage({ type: '', text: '' });
+        try {
+          const backup = await exportAllCollections();
+          downloadBackup(backup);
+          const total = Object.values(backup.collections).reduce((s, c) => s + Object.keys(c).length, 0);
+          setMessage({ type: 'success', text: 'Sauvegarde téléchargée : ' + total + ' document(s). Conservez le fichier en lieu sûr (OneDrive, etc.).' });
+        } catch (error) {
+          console.error('Erreur sauvegarde:', error);
+          setMessage({ type: 'error', text: 'Erreur lors de la sauvegarde : ' + error.message });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      const handleFile = async (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        try {
+          const backup = JSON.parse(await file.text());
+          if (backup.app !== 'bni-meeting-manager' || !backup.collections) {
+            throw new Error('ce fichier n\'est pas une sauvegarde BNI Meeting Manager');
+          }
+          setLoadedBackup(backup);
+          setSelectedCollections(Object.keys(backup.collections));
+          setDeleteExtras(false);
+          setMessage({ type: '', text: '' });
+        } catch (error) {
+          setLoadedBackup(null);
+          setMessage({ type: 'error', text: 'Fichier invalide : ' + error.message });
+        }
+      };
+
+      const toggleCollection = (name) => setSelectedCollections(prev =>
+        prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]
+      );
+
+      const handleRestore = async () => {
+        if (!loadedBackup || selectedCollections.length === 0) return;
+        const when = new Date(loadedBackup.exportedAt).toLocaleString('fr-FR');
+        if (!confirm('Restaurer ' + selectedCollections.length + ' collection(s) à l\'état du ' + when + ' ?\n\n'
+          + 'Les documents de la sauvegarde remplaceront les documents actuels.'
+          + (deleteExtras ? '\nLes documents créés APRÈS la sauvegarde seront SUPPRIMÉS.' : '\nLes documents créés après la sauvegarde seront conservés.')
+          + '\n\nUne sauvegarde de l\'état actuel sera d\'abord téléchargée automatiquement.')) return;
+        if (prompt('Pour confirmer, tapez RESTAURER') !== 'RESTAURER') return;
+
+        setBusy(true);
+        setMessage({ type: '', text: '' });
+        try {
+          // Filet de sécurité : sauvegarde de l'état actuel avant toute écriture
+          const safety = await exportAllCollections();
+          downloadBackup(safety, 'bni-mm-avant-restauration');
+
+          let written = 0, deleted = 0;
+          for (const name of selectedCollections) {
+            const docs = loadedBackup.collections[name] || {};
+            const ops = Object.entries(docs).map(([id, d]) => ({ type: 'set', id, data: deserializeFirestoreValue(d) }));
+            if (deleteExtras) {
+              Object.keys(safety.collections[name] || {})
+                .filter(id => !docs[id])
+                .forEach(id => ops.push({ type: 'delete', id }));
+            }
+            // Firestore limite un batch à 500 opérations -> lots de 400
+            for (let i = 0; i < ops.length; i += 400) {
+              const batch = db.batch();
+              ops.slice(i, i + 400).forEach(op => {
+                const ref = db.collection(name).doc(op.id);
+                if (op.type === 'set') { batch.set(ref, op.data); written++; }
+                else { batch.delete(ref); deleted++; }
+              });
+              await batch.commit();
+            }
+          }
+          setMessage({ type: 'success', text: 'Restauration terminée : ' + written + ' document(s) restauré(s)' + (deleted ? ', ' + deleted + ' supprimé(s)' : '') + '.' });
+          setLoadedBackup(null);
+        } catch (error) {
+          console.error('Erreur restauration:', error);
+          setMessage({ type: 'error', text: 'Erreur lors de la restauration : ' + error.message + '. La sauvegarde « avant restauration » téléchargée permet de revenir en arrière.' });
+        } finally {
+          setBusy(false);
+        }
+      };
+
+      return (
+        <div>
+          <div className="card">
+            <div className="card-title">💾 Sauvegarder les données</div>
+            <p style={{ marginBottom: '15px', color: '#4b5563' }}>
+              Télécharge un fichier JSON contenant toutes les données de l'application
+              (membres, réunions, présences, invités, cotisations, dépenses, utilisateurs, historique, postulations…).
+              À faire avant chaque mise à jour de l'application.
+            </p>
+            {message.text && <div className={'alert alert-' + message.type}>{message.text}</div>}
+            <button className="btn btn-primary" onClick={handleExport} disabled={busy}>
+              {busy ? '⏳ En cours…' : '⬇️ Télécharger une sauvegarde complète'}
+            </button>
+          </div>
+
+          <div className="card" style={{ marginTop: '20px' }}>
+            <div className="card-title">♻️ Restaurer une sauvegarde</div>
+            <p style={{ marginBottom: '15px', color: '#4b5563' }}>
+              À utiliser uniquement en cas de problème. Une sauvegarde de l'état actuel est téléchargée automatiquement avant toute restauration.
+            </p>
+            <input type="file" accept=".json,application/json" onChange={handleFile} disabled={busy} />
+
+            {loadedBackup && (
+              <div style={{ marginTop: '20px' }}>
+                <div className="alert alert-info">
+                  Sauvegarde du <strong>{new Date(loadedBackup.exportedAt).toLocaleString('fr-FR')}</strong>
+                  {loadedBackup.exportedBy && <> par {loadedBackup.exportedBy}</>}
+                  {loadedBackup.projectId !== FIREBASE_CONFIG.projectId && (
+                    <><br /><strong>⚠️ Attention : sauvegarde issue d'un autre projet ({loadedBackup.projectId}).</strong></>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '8px', margin: '15px 0' }}>
+                  {Object.keys(loadedBackup.collections).map(name => (
+                    <label key={name} style={{ display: 'flex', gap: '8px', alignItems: 'center', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={selectedCollections.includes(name)} onChange={() => toggleCollection(name)} />
+                      {name} ({Object.keys(loadedBackup.collections[name]).length})
+                    </label>
+                  ))}
+                </div>
+                <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '15px', color: '#b91c1c' }}>
+                  <input type="checkbox" checked={deleteExtras} onChange={(e) => setDeleteExtras(e.target.checked)} />
+                  Supprimer aussi les documents créés après cette sauvegarde (retour exact à l'état sauvegardé)
+                </label>
+                <div className="btn-group">
+                  <button className="btn btn-danger" onClick={handleRestore} disabled={busy || selectedCollections.length === 0}>
+                    {busy ? '⏳ En cours…' : '♻️ Restaurer les collections sélectionnées'}
+                  </button>
+                  <button className="btn btn-secondary" onClick={() => setLoadedBackup(null)} disabled={busy}>Annuler</button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       );
     }
@@ -2591,9 +2807,14 @@
       const [selectedGuests, setSelectedGuests] = useState([]); // sélection pour suppression en masse
       // Suivi de l'invité (relance après réunion clôturée)
       const [followupGuest, setFollowupGuest] = useState(null);
+      const [fuName, setFuName] = useState('');
+      const [fuHostId, setFuHostId] = useState('');
+      const [fuHostName, setFuHostName] = useState('');
+      const [fuEmail, setFuEmail] = useState('');
+      const [fuPhone, setFuPhone] = useState('');
+      const [fuProfession, setFuProfession] = useState('');
       const [fuWantsToJoin, setFuWantsToJoin] = useState('oui');
       const [fuApplicationDone, setFuApplicationDone] = useState('non');
-      const [fuPlannedWhen, setFuPlannedWhen] = useState('');
       const [fuWantsAssistance, setFuWantsAssistance] = useState('non');
 
       const handleExcelImport = async (e) => {
@@ -2782,25 +3003,53 @@
 
       const openFollowup = (guest) => {
         const f = guest.followup || {};
+        const host = guest.invitedBy ? members.find(m => m.id === guest.invitedBy) : null;
+        setFuName(guest.name || '');
+        setFuHostId(host ? host.id : '');
+        setFuHostName(guest.invitedByName || (host ? host.name : ''));
+        setFuEmail(guest.email || '');
+        setFuPhone(guest.phone || '');
+        setFuProfession(guest.profession || guest.specialty || guest.company || '');
         setFuWantsToJoin(f.wantsToJoin || 'oui');
         setFuApplicationDone(f.applicationDone || 'non');
-        setFuPlannedWhen(f.plannedWhen || '');
         setFuWantsAssistance(f.wantsAssistance || 'non');
         setFollowupGuest(guest);
       };
 
       const handleSaveFollowup = async () => {
         if (!followupGuest) return;
+        if (!fuName.trim()) {
+          alert('Le nom de l\'invité est obligatoire');
+          return;
+        }
         try {
+          const g = followupGuest;
+          // On conserve les champs existants du suivi (ex. plannedWhen des anciennes fiches)
           const followup = {
+            ...(g.followup || {}),
             wantsToJoin: fuWantsToJoin,
-            applicationDone: fuWantsToJoin === 'oui' ? fuApplicationDone : '',
-            plannedWhen: fuWantsToJoin === 'non' ? fuPlannedWhen.trim() : '',
-            wantsAssistance: fuWantsAssistance,
+            applicationDone: fuApplicationDone,
+            // Assistance demandée uniquement si la postulation n'est pas remplie
+            wantsAssistance: fuApplicationDone === 'non' ? fuWantsAssistance : '',
             contactedAt: new Date().toISOString(),
             contactedBy: auth.currentUser.email
           };
-          await db.collection(COLLECTION_NAMES.guests).doc(followupGuest.id).update({ followup });
+          // N'écrire que les champs de l'invité réellement modifiés (aucun écrasement des données existantes)
+          const changes = { followup };
+          const setIfChanged = (field, value) => {
+            if ((g[field] || '') !== value) changes[field] = value;
+          };
+          setIfChanged('name', fuName.trim());
+          setIfChanged('email', fuEmail.trim());
+          setIfChanged('phone', fuPhone.trim());
+          setIfChanged('profession', fuProfession.trim());
+          const originalHostId = (g.invitedBy && members.some(m => m.id === g.invitedBy)) ? g.invitedBy : '';
+          if (fuHostId !== originalHostId) {
+            const host = members.find(m => m.id === fuHostId);
+            changes.invitedBy = host ? host.id : '';
+            changes.invitedByName = host ? host.name : '';
+          }
+          await db.collection(COLLECTION_NAMES.guests).doc(g.id).update(changes);
           setFollowupGuest(null);
           alert('Suivi enregistré');
         } catch (error) {
@@ -3200,14 +3449,14 @@
                 <table className="print-table">
                   <thead>
                     <tr>
-                      <th>Invité</th>
+                      <th>Invités</th>
+                      <th>Membres hôte</th>
+                      <th>Mail</th>
+                      <th>Numéro de téléphone</th>
+                      <th>Casquette métier</th>
+                      <th>Intéressé par BNI</th>
+                      <th>Postulation remplie</th>
                       <th>Réunion</th>
-                      <th>Société</th>
-                      <th>Contact</th>
-                      <th>Souhaite intégrer BNI</th>
-                      <th>Postulation faite</th>
-                      <th>Prévu pour</th>
-                      <th>Souhaite assistance</th>
                       <th>Contacté le</th>
                     </tr>
                   </thead>
@@ -3215,20 +3464,22 @@
                     {followupReports.map(({ guest, meeting }) => {
                       const f = guest.followup || {};
                       const yn = (v) => v === 'oui' ? 'Oui' : v === 'non' ? 'Non' : '-';
+                      const host = guest.invitedByName || (() => { const m = members.find(x => x.id === guest.invitedBy); return m ? m.name : '-'; })();
                       return (
                         <tr key={guest.id}>
                           <td><strong>{guest.name}</strong></td>
-                          <td>{meeting ? new Date(meeting.date).toLocaleDateString('fr-FR') : 'N/A'}</td>
-                          <td>{guest.company || '-'}</td>
-                          <td>
-                            {guest.email && <div style={{ fontSize: '12px' }}>{guest.email}</div>}
-                            {guest.phone && <div style={{ fontSize: '12px' }}>{guest.phone}</div>}
-                            {!guest.email && !guest.phone && '-'}
+                          <td><strong>{host}</strong></td>
+                          <td>{guest.email ? <a href={'mailto:' + guest.email}>{guest.email}</a> : '-'}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}><strong>{guest.phone || '-'}</strong></td>
+                          <td><strong>{guest.profession || guest.specialty || guest.company || '-'}</strong></td>
+                          <td style={{ textAlign: 'center' }}><strong>{yn(f.wantsToJoin)}</strong></td>
+                          <td style={{ textAlign: 'center' }}>
+                            <strong>{yn(f.applicationDone)}</strong>
+                            {f.applicationDone === 'non' && f.wantsAssistance && (
+                              <div style={{ fontSize: '12px' }}>Assistance souhaitée : {yn(f.wantsAssistance)}</div>
+                            )}
                           </td>
-                          <td>{yn(f.wantsToJoin)}</td>
-                          <td>{f.wantsToJoin === 'oui' ? yn(f.applicationDone) : '-'}</td>
-                          <td>{f.wantsToJoin === 'non' ? (f.plannedWhen || '-') : '-'}</td>
-                          <td>{yn(f.wantsAssistance)}</td>
+                          <td>{meeting ? new Date(meeting.date).toLocaleDateString('fr-FR') : 'N/A'}</td>
                           <td>{f.contactedAt ? new Date(f.contactedAt).toLocaleDateString('fr-FR') : '-'}</td>
                         </tr>
                       );
@@ -3242,54 +3493,76 @@
           {/* MODALE : formulaire de suivi de l'invité */}
           {followupGuest && (
             <div className="modal-overlay" onClick={() => setFollowupGuest(null)}>
-              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
-                <h3 style={{ marginBottom: '20px', color: '#C8102E' }}>
-                  📋 Suivi de l'invité
+              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px', maxHeight: '90vh', overflowY: 'auto' }}>
+                <h3 style={{ marginBottom: '6px', color: '#C8102E' }}>
+                  📋 Fiche de suivi de l'invité
                 </h3>
+                <p style={{ marginBottom: '20px', fontSize: '13px', color: '#6b7280' }}>
+                  Réunion du {(() => { const m = meetings.find(m => m.id === followupGuest.meetingId); return m ? new Date(m.date).toLocaleDateString('fr-FR') : 'N/A'; })()}
+                </p>
 
-                <div style={{ marginBottom: '20px', padding: '15px', background: '#f9fafb', borderRadius: '8px' }}>
-                  <strong>Invité :</strong> {followupGuest.name}<br />
-                  {followupGuest.company && (<><strong>Société :</strong> {followupGuest.company}<br /></>)}
-                  <strong>Réunion :</strong> {(() => { const m = meetings.find(m => m.id === followupGuest.meetingId); return m ? new Date(m.date).toLocaleDateString('fr-FR') : 'N/A'; })()}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+                  <div>
+                    <label className="form-label">Invité *</label>
+                    <input type="text" className="form-input" value={fuName} onChange={(e) => setFuName(e.target.value)} placeholder="Prénom NOM" />
+                  </div>
+                  <div>
+                    <label className="form-label">Membre hôte</label>
+                    <select
+                      className="form-select"
+                      value={fuHostId}
+                      onChange={(e) => {
+                        const m = members.find(x => x.id === e.target.value);
+                        setFuHostId(m ? m.id : '');
+                        setFuHostName(m ? m.name : '');
+                      }}
+                    >
+                      <option value="">{!fuHostId && fuHostName ? fuHostName + ' (non rattaché)' : '-- Choisir un membre --'}</option>
+                      {[...members].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="form-label">Mail</label>
+                    <input type="email" className="form-input" value={fuEmail} onChange={(e) => setFuEmail(e.target.value)} placeholder="exemple@mail.com" />
+                  </div>
+                  <div>
+                    <label className="form-label">Numéro de téléphone</label>
+                    <input type="tel" className="form-input" value={fuPhone} onChange={(e) => setFuPhone(e.target.value)} placeholder="06.xx.xx.xx.xx" />
+                  </div>
+                  <div style={{ gridColumn: '1 / -1' }}>
+                    <label className="form-label">Casquette métier</label>
+                    <input type="text" className="form-input" value={fuProfession} onChange={(e) => setFuProfession(e.target.value)} placeholder="Métier / activité représentée" />
+                  </div>
                 </div>
 
-                <div style={{ marginBottom: '16px' }}>
-                  <label className="form-label">1. Souhaite intégrer BNI ?</label>
-                  <select className="form-select" value={fuWantsToJoin} onChange={(e) => setFuWantsToJoin(e.target.value)}>
-                    <option value="oui">Oui</option>
-                    <option value="non">Non</option>
-                  </select>
-                </div>
+                <div style={{ padding: '15px', background: '#f9fafb', borderRadius: '8px', marginBottom: '20px' }}>
+                  <div style={{ marginBottom: '14px' }}>
+                    <label className="form-label">Intéressé par BNI ?</label>
+                    <select className="form-select" value={fuWantsToJoin} onChange={(e) => setFuWantsToJoin(e.target.value)}>
+                      <option value="oui">Oui</option>
+                      <option value="non">Non</option>
+                    </select>
+                  </div>
 
-                {fuWantsToJoin === 'oui' && (
-                  <div style={{ marginBottom: '16px' }}>
-                    <label className="form-label">2. Postulation faite ?</label>
+                  <div style={{ marginBottom: fuApplicationDone === 'non' ? '14px' : 0 }}>
+                    <label className="form-label">Postulation remplie ?</label>
                     <select className="form-select" value={fuApplicationDone} onChange={(e) => setFuApplicationDone(e.target.value)}>
                       <option value="oui">Oui</option>
                       <option value="non">Non</option>
                     </select>
                   </div>
-                )}
 
-                {fuWantsToJoin === 'non' && (
-                  <div style={{ marginBottom: '16px' }}>
-                    <label className="form-label">3. C'est prévu pour quand ?</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={fuPlannedWhen}
-                      onChange={(e) => setFuPlannedWhen(e.target.value)}
-                      placeholder="Ex : Septembre 2026, plus tard, indéterminé…"
-                    />
-                  </div>
-                )}
-
-                <div style={{ marginBottom: '20px' }}>
-                  <label className="form-label">4. Souhaite être contacté pour assistance à postulation ?</label>
-                  <select className="form-select" value={fuWantsAssistance} onChange={(e) => setFuWantsAssistance(e.target.value)}>
-                    <option value="oui">Oui</option>
-                    <option value="non">Non</option>
-                  </select>
+                  {fuApplicationDone === 'non' && (
+                    <div>
+                      <label className="form-label">Si non, souhaite être assisté ?</label>
+                      <select className="form-select" value={fuWantsAssistance} onChange={(e) => setFuWantsAssistance(e.target.value)}>
+                        <option value="oui">Oui</option>
+                        <option value="non">Non</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="btn-group">
