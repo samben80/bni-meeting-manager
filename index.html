@@ -636,6 +636,17 @@
       box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
     }
 
+    /* Dans une modale : libellé au-dessus du champ, champ pleine largeur */
+    .modal-content .form-label {
+      display: block;
+    }
+
+    .modal-content .form-input,
+    .modal-content .form-select {
+      width: 100%;
+      box-sizing: border-box;
+    }
+
     @media (max-width: 600px) {
       .modal-content {
         padding: 20px;
