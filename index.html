@@ -824,6 +824,17 @@
       border-bottom: 2px solid #e5e7eb;
     }
 
+    /* Logo des rapports à l'écran (l'image source fait 2048px ; l'impression garde ses propres tailles) */
+    @media screen {
+      .print-logo {
+        display: block;
+        width: 140px;
+        max-width: 40%;
+        height: auto;
+        margin: 0 auto 16px;
+      }
+    }
+
     .print-header h1 {
       font-size: 28px;
       margin: 0 0 10px 0;
